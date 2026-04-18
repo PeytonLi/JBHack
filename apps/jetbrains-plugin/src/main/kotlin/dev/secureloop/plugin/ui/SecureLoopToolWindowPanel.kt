@@ -11,6 +11,7 @@ import dev.secureloop.plugin.services.SecureLoopProjectService
 import java.awt.BorderLayout
 import javax.swing.DefaultListModel
 import javax.swing.JButton
+import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JSplitPane
 import javax.swing.ListSelectionModel
@@ -124,7 +125,7 @@ class SecureLoopToolWindowPanel(
 
     private fun resolutionText(resolution: ResolutionState): String {
         return when (resolution) {
-            ResolutionState.Pending -> "Resolving local file…"
+            ResolutionState.Pending -> "Resolving local file..."
             is ResolutionState.Resolved -> "${resolution.filePath}:${resolution.lineNumber}"
             is ResolutionState.Ambiguous -> "Ambiguous: ${resolution.candidates.joinToString()}"
             is ResolutionState.Unresolved -> "Unresolved: ${resolution.reason}"
@@ -133,16 +134,12 @@ class SecureLoopToolWindowPanel(
 
     private class IncidentCellRenderer : ColoredListCellRenderer<IncidentPresentation>() {
         override fun customizeCellRenderer(
-            list: JBList<out IncidentPresentation>,
-            value: IncidentPresentation?,
+            list: JList<out IncidentPresentation>,
+            value: IncidentPresentation,
             index: Int,
             selected: Boolean,
             hasFocus: Boolean,
         ) {
-            if (value == null) {
-                return
-            }
-
             append(value.incident.exceptionType, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
             append(" ${value.incident.title}", SimpleTextAttributes.REGULAR_ATTRIBUTES)
 

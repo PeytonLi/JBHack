@@ -1,12 +1,26 @@
 plugins {
     id("java")
-    kotlin("jvm") version "1.9.25"
-    kotlin("plugin.serialization") version "1.9.25"
+    kotlin("jvm") version "2.2.20"
+    kotlin("plugin.serialization") version "2.2.20"
     id("org.jetbrains.intellij.platform") version "2.11.0"
 }
 
 group = "dev.secureloop"
 version = "0.1.0"
+
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(21))
+        vendor.set(JvmVendorSpec.JETBRAINS)
+    }
+}
+
+kotlin {
+    jvmToolchain {
+        languageVersion.set(JavaLanguageVersion.of(21))
+        vendor.set(JvmVendorSpec.JETBRAINS)
+    }
+}
 
 repositories {
     mavenCentral()
@@ -42,7 +56,9 @@ tasks {
         targetCompatibility = "21"
     }
 
-    withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-        kotlinOptions.jvmTarget = "21"
+    withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile> {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        }
     }
 }
