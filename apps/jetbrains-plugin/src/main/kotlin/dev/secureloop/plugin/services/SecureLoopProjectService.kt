@@ -14,9 +14,12 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBColor
+import dev.secureloop.plugin.model.AgentConnectionState
 import dev.secureloop.plugin.model.IncidentPresentation
 import dev.secureloop.plugin.model.NormalizedIncident
+import dev.secureloop.plugin.model.ProjectCompatibilityState
 import dev.secureloop.plugin.model.ResolutionState
 import dev.secureloop.plugin.ui.SecureLoopGutterIconRenderer
 import dev.secureloop.plugin.ui.SecureLoopToolWindowPanel
@@ -24,13 +27,17 @@ import dev.secureloop.plugin.util.FileResolution
 import dev.secureloop.plugin.util.ProjectFileResolver
 import java.awt.Color
 import java.awt.Font
+import java.nio.file.Files
+import java.nio.file.Path
 
 @Service(Service.Level.PROJECT)
 class SecureLoopProjectService(
     private val project: Project,
 ) : Disposable {
     private val incidents = mutableListOf<IncidentPresentation>()
+    private val projectCompatibility = detectProjectCompatibility()
     private var panel: SecureLoopToolWindowPanel? = null
+    private var connectionState: AgentConnectionState = AgentConnectionState.Connecting
 
     init {
         ApplicationManager.getApplication().messageBus.connect(this).subscribe(
@@ -41,13 +48,26 @@ class SecureLoopProjectService(
                 }
             },
         )
+        ApplicationManager.getApplication().messageBus.connect(this).subscribe(
+            AGENT_STATUS_TOPIC,
+            object : AgentStatusListener {
+                override fun connectionStateChanged(state: AgentConnectionState) {
+                    connectionState = state
+                    updateEnvironment()
+                }
+            },
+        )
     }
 
     fun attachPanel(toolWindowPanel: SecureLoopToolWindowPanel) {
         panel = toolWindowPanel
+        val applicationService = service<SecureLoopApplicationService>()
+        connectionState = applicationService.currentConnectionState()
         ApplicationManager.getApplication().invokeLater {
+            toolWindowPanel.updateEnvironment(connectionState, projectCompatibility)
             toolWindowPanel.replaceIncidents(incidents)
         }
+        applicationService.refreshStatus()
     }
 
     fun openSelectionInEditor(presentation: IncidentPresentation) {
@@ -64,24 +84,60 @@ class SecureLoopProjectService(
         BrowserUtil.browse(presentation.incident.eventWebUrl)
     }
 
+    fun markIncidentReviewed(presentation: IncidentPresentation) {
+        if (presentation.reviewed) {
+            return
+        }
+
+        service<SecureLoopApplicationService>().markIncidentReviewed(presentation.incident.incidentId)
+        upsertIncident(presentation.copy(reviewed = true))
+    }
+
+    fun runDemoIncident() {
+        if (projectCompatibility is ProjectCompatibilityState.DemoReady) {
+            service<SecureLoopApplicationService>().triggerDemoIncident()
+        } else {
+            openSetupGuide()
+        }
+    }
+
+    fun retryConnection() {
+        service<SecureLoopApplicationService>().refreshStatus()
+    }
+
+    fun openSetupGuide() {
+        val basePath = project.basePath ?: return
+        val guidePath = Path.of(basePath).resolve("README.md").normalize()
+        val guideFile = LocalFileSystem.getInstance().refreshAndFindFileByPath(guidePath.toString().replace("\\", "/"))
+        if (guideFile != null) {
+            ApplicationManager.getApplication().invokeLater {
+                FileEditorManager.getInstance(project).openFile(guideFile, true)
+            }
+        }
+    }
+
     override fun dispose() {
         panel = null
     }
 
     private fun handleIncident(incident: NormalizedIncident) {
+        val isNewIncident = incidents.none { it.incident.incidentId == incident.incidentId }
         val placeholder = IncidentPresentation(incident = incident)
         upsertIncident(placeholder)
-        notifyIncident(incident)
 
         val resolution = ProjectFileResolver.resolve(project, incident)
         val resolvedPresentation = placeholder.copy(resolution = resolution.toPresentationState())
         upsertIncident(resolvedPresentation)
 
+        if (!isNewIncident) {
+            return
+        }
+
+        notifyIncident(incident)
+
         if (resolution is FileResolution.Resolved && isProjectWindowActive()) {
             openAndHighlight(resolution.file, resolution.lineNumber, incident)
         }
-
-        service<SecureLoopApplicationService>().acknowledgeIncident(incident.incidentId)
     }
 
     private fun upsertIncident(presentation: IncidentPresentation) {
@@ -94,6 +150,12 @@ class SecureLoopProjectService(
 
         ApplicationManager.getApplication().invokeLater {
             panel?.upsertIncident(presentation)
+        }
+    }
+
+    private fun updateEnvironment() {
+        ApplicationManager.getApplication().invokeLater {
+            panel?.updateEnvironment(connectionState, projectCompatibility)
         }
     }
 
@@ -149,5 +211,25 @@ class SecureLoopProjectService(
             is FileResolution.Ambiguous -> ResolutionState.Ambiguous(candidates)
             is FileResolution.Unresolved -> ResolutionState.Unresolved(reason)
         }
+    }
+
+    private fun detectProjectCompatibility(): ProjectCompatibilityState {
+        val basePath = project.basePath ?: return ProjectCompatibilityState.Unsupported(
+            "Open the SecureLoop demo repo before running demo mode.",
+        )
+
+        val root = Path.of(basePath)
+        val targetPath = root.resolve("apps/target/src/main.py")
+        val policyPath = root.resolve("security-policy.md")
+        if (Files.exists(targetPath) && Files.exists(policyPath)) {
+            return ProjectCompatibilityState.DemoReady(
+                targetPath = "apps/target/src/main.py",
+                policyPath = "security-policy.md",
+            )
+        }
+
+        return ProjectCompatibilityState.Unsupported(
+            "v1 supports the SecureLoop demo repo only. Open a project containing apps/target/src/main.py and security-policy.md.",
+        )
     }
 }

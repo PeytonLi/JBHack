@@ -3,6 +3,7 @@ package dev.secureloop.plugin.model
 data class IncidentPresentation(
     val incident: NormalizedIncident,
     val resolution: ResolutionState = ResolutionState.Pending,
+    val reviewed: Boolean = false,
 )
 
 sealed interface ResolutionState {
