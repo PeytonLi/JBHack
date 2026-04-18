@@ -7,8 +7,9 @@ Auto-Scribe is a self-healing AI SRE agent prototype: it receives a Sentry crash
 This repo is a monorepo scaffold for three applications plus shared types:
 
 - `apps/target`: intentionally broken FastAPI service (crash source)
-- `apps/agent`: FastAPI agent service (webhook in, analysis pipeline out)
+- `apps/agent`: FastAPI companion service (signed Sentry webhook in, IDE SSE stream out)
 - `apps/dashboard`: Next.js dashboard for session timeline and COE output
+- `apps/jetbrains-plugin`: IntelliJ/PyCharm plugin for raw incident surfacing and line highlighting
 - `packages/shared-types`: shared TypeScript contracts
 - `docs/`: architecture and implementation context
 
@@ -61,6 +62,10 @@ Expected local ports:
 - agent: `http://localhost:8001`
 - dashboard: `http://localhost:3000`
 
+The companion service writes an IDE auth token to `%USERPROFILE%/.secureloop/ide-token`. The JetBrains plugin reads that token and connects to the local SSE stream.
+
+For plugin-only local testing, set `SECURE_LOOP_ALLOW_DEBUG_ENDPOINTS=1` and follow `docs/PLUGIN_TESTING.md`.
+
 ## Root Scripts
 
 - `pnpm dev`: run target, agent, and dashboard concurrently
@@ -74,7 +79,8 @@ The intended demo path is one reproducible failure case:
 
 - Trigger checkout with a warehouse reference that does not exist
 - Emit Sentry event from target
-- Receive event in agent webhook
+- Receive the signed alert in the companion webhook
+- Stream the normalized incident into the JetBrains plugin and highlight the affected line
 - Produce investigation and fix artifacts
 - Generate COE report and open PR
 
@@ -90,4 +96,5 @@ See `docs/AGENT_CONTEXT.md` for implementation checkpoints and cut-lines.
 
 - `docs/AGENT_CONTEXT.md`: source-of-truth implementation plan
 - `docs/DESIGN_DOC.md`: design rationale and tradeoffs
+- `docs/PLUGIN_TESTING.md`: step-by-step plugin smoke test and full Sentry verification flow
 - `STORYBOARD.md`: 3-minute demo storyline
