@@ -1,0 +1,13 @@
+{
+  "name": "autoscribe",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently --names \"target,agent,dashboard\" --prefix-colors \"red,blue,green\" \"cd apps/target && uv run uvicorn src.main:app --port 8000 --reload\" \"cd apps/agent && uv run uvicorn src.main:app --port 8001 --reload\" \"pnpm --filter dashboard dev\"",
+    "install:python": "cd apps/agent && uv sync && cd ../target && uv sync",
+    "build": "pnpm --filter dashboard build",
+    "typecheck": "pnpm --filter dashboard tsc --noEmit && pnpm --filter @jbhack/shared-types tsc --noEmit"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
