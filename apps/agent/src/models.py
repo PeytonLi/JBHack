@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -53,6 +53,24 @@ class NormalizedIncident(CamelModel):
     code_context: str | None = None
     event_web_url: str
     received_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class IncidentSummary(CamelModel):
+    open_count: int
+    reviewed_count: int
+    total_count: int
+
+
+class IncidentRecord(CamelModel):
+    incident: NormalizedIncident
+    status: Literal["open", "reviewed"]
+    created_at: datetime
+    reviewed_at: datetime | None = None
+
+
+class IncidentFeedResponse(CamelModel):
+    summary: IncidentSummary
+    incidents: list[IncidentRecord]
 
 
 class DebugIncidentRequest(CamelModel):

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import aiosqlite
 
-from .models import NormalizedIncident
+from .models import IncidentRecord, IncidentSummary, NormalizedIncident
 
 
 class IncidentStore:
@@ -55,7 +57,7 @@ class IncidentStore:
             except sqlite3.IntegrityError:
                 return False
 
-    async def list_unacknowledged(self) -> list[NormalizedIncident]:
+    async def list_unreviewed(self) -> list[NormalizedIncident]:
         async with aiosqlite.connect(self._db_path) as db:
             cursor = await db.execute(
                 """
@@ -68,19 +70,94 @@ class IncidentStore:
             rows = await cursor.fetchall()
         return [NormalizedIncident.model_validate_json(row[0]) for row in rows]
 
-    async def acknowledge(self, incident_id: str) -> bool:
+    async def list_incidents(
+        self,
+        *,
+        status: Literal["all", "open", "reviewed"] = "all",
+        limit: int = 50,
+    ) -> list[IncidentRecord]:
+        clauses: list[str] = []
+        params: list[str | int] = []
+
+        if status == "open":
+            clauses.append("acknowledged = 0")
+        elif status == "reviewed":
+            clauses.append("acknowledged = 1")
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                f"""
+                SELECT payload_json, acknowledged, created_at, acknowledged_at
+                FROM incidents
+                {where_sql}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                [*params, limit],
+            )
+            rows = await cursor.fetchall()
+
+        incidents: list[IncidentRecord] = []
+        for payload_json, acknowledged, created_at, acknowledged_at in rows:
+            incidents.append(
+                IncidentRecord(
+                    incident=NormalizedIncident.model_validate_json(payload_json),
+                    status="reviewed" if acknowledged else "open",
+                    created_at=_parse_datetime(created_at),
+                    reviewed_at=_parse_datetime(acknowledged_at),
+                )
+            )
+        return incidents
+
+    async def get_summary(self) -> IncidentSummary:
         async with aiosqlite.connect(self._db_path) as db:
             cursor = await db.execute(
                 """
-                UPDATE incidents
-                SET acknowledged = 1,
-                    acknowledged_at = CURRENT_TIMESTAMP
-                WHERE incident_id = ?
-                """,
+                SELECT
+                    SUM(CASE WHEN acknowledged = 0 THEN 1 ELSE 0 END) AS open_count,
+                    SUM(CASE WHEN acknowledged = 1 THEN 1 ELSE 0 END) AS reviewed_count,
+                    COUNT(*) AS total_count
+                FROM incidents
+                """
+            )
+            row = await cursor.fetchone()
+
+        open_count, reviewed_count, total_count = row or (0, 0, 0)
+        return IncidentSummary(
+            open_count=int(open_count or 0),
+            reviewed_count=int(reviewed_count or 0),
+            total_count=int(total_count or 0),
+        )
+
+    async def mark_reviewed(self, incident_id: str) -> bool:
+        async with aiosqlite.connect(self._db_path) as db:
+            exists_cursor = await db.execute(
+                "SELECT acknowledged FROM incidents WHERE incident_id = ?",
                 (incident_id,),
             )
+            row = await exists_cursor.fetchone()
+            if row is None:
+                return False
+
+            if row[0]:
+                return True
+
+            await db.execute(
+                """
+                UPDATE incidents
+                SET acknowledged = 1,
+                    acknowledged_at = ?
+                WHERE incident_id = ?
+                """,
+                (datetime.now(UTC).isoformat(), incident_id),
+            )
             await db.commit()
-            return cursor.rowcount > 0
+            return True
+
+    async def acknowledge(self, incident_id: str) -> bool:
+        return await self.mark_reviewed(incident_id)
 
 
 class IncidentBroker:
@@ -104,3 +181,17 @@ class IncidentBroker:
             subscribers = list(self._subscribers)
         for queue in subscribers:
             queue.put_nowait(payload)
+
+
+def _parse_datetime(raw_value: str | None) -> datetime | None:
+    if not raw_value:
+        return None
+
+    normalized = raw_value.strip().replace(" ", "T")
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed

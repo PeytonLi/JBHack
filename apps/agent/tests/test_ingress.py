@@ -56,16 +56,31 @@ async def test_signed_webhook_persists_and_acknowledges_incident(app) -> None:
         )
         assert response.status_code == 204
 
-        incidents = await app.state.store.list_unacknowledged()
+        incidents = await app.state.store.list_unreviewed()
         assert len(incidents) == 1
         assert incidents[0].repo_relative_path == "apps/target/src/main.py"
 
+        feed_response = await client.get("/incidents?status=all")
+        assert feed_response.status_code == 200
+        feed = feed_response.json()
+        assert feed["summary"]["openCount"] == 1
+        assert feed["summary"]["reviewedCount"] == 0
+        assert len(feed["incidents"]) == 1
+        assert feed["incidents"][0]["status"] == "open"
+
         ack_response = await client.post(
-            f"/ide/events/{incidents[0].incident_id}/ack",
+            f"/ide/events/{incidents[0].incident_id}/review",
             headers={"authorization": "Bearer ide-token"},
         )
         assert ack_response.status_code == 204
-        assert await app.state.store.list_unacknowledged() == []
+        assert await app.state.store.list_unreviewed() == []
+
+        reviewed_feed_response = await client.get("/incidents?status=reviewed")
+        assert reviewed_feed_response.status_code == 200
+        reviewed_feed = reviewed_feed_response.json()
+        assert reviewed_feed["summary"]["openCount"] == 0
+        assert reviewed_feed["summary"]["reviewedCount"] == 1
+        assert reviewed_feed["incidents"][0]["status"] == "reviewed"
 
 
 @pytest.mark.asyncio
@@ -87,8 +102,21 @@ async def test_debug_endpoint_creates_live_incident(app) -> None:
         assert response.status_code == 201
         payload = response.json()
         assert payload["repoRelativePath"] == "apps/target/src/main.py"
-        incidents = await app.state.store.list_unacknowledged()
+        incidents = await app.state.store.list_unreviewed()
         assert len(incidents) == 1
+
+
+@pytest.mark.asyncio
+async def test_health_reports_demo_mode(app) -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/health")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["allowDebugEndpoints"] is True
+        assert payload["openIncidentCount"] == 0
+        assert payload["reviewedIncidentCount"] == 0
 
 
 def test_normalize_sentry_event_prefers_in_app_frame() -> None:

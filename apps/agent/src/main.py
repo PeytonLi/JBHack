@@ -5,14 +5,19 @@ import hashlib
 import hmac
 import logging
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .config import Settings, load_settings
-from .models import DebugIncidentRequest, IssueAlertWebhook, normalize_sentry_event
+from .models import (
+    DebugIncidentRequest,
+    IncidentFeedResponse,
+    IssueAlertWebhook,
+    normalize_sentry_event,
+)
 from .sentry_client import SentryEventClient
 from .storage import IncidentBroker, IncidentStore
 
@@ -47,13 +52,27 @@ def create_app(
     @app.get("/health")
     async def health() -> JSONResponse:
         settings_state: Settings = app.state.settings
+        summary = await app.state.store.get_summary()
         return JSONResponse(
             {
                 "status": "ok",
                 "sqlitePath": str(settings_state.sqlite_path),
                 "ideTokenFile": str(settings_state.ide_token_file),
+                "allowDebugEndpoints": settings_state.allow_debug_endpoints,
+                "openIncidentCount": summary.open_count,
+                "reviewedIncidentCount": summary.reviewed_count,
+                "totalIncidentCount": summary.total_count,
             }
         )
+
+    @app.get("/incidents")
+    async def incidents_feed(
+        status: Literal["all", "open", "reviewed"] = Query(default="all"),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> IncidentFeedResponse:
+        incidents = await app.state.store.list_incidents(status=status, limit=limit)
+        summary = await app.state.store.get_summary()
+        return IncidentFeedResponse(summary=summary, incidents=incidents)
 
     @app.post("/sentry/webhook", status_code=204)
     @app.post("/webhook/sentry", status_code=204)
@@ -93,7 +112,7 @@ def create_app(
         _verify_ide_request(request, app.state.settings)
 
         async def event_stream() -> AsyncIterator[str]:
-            for incident in await app.state.store.list_unacknowledged():
+            for incident in await app.state.store.list_unreviewed():
                 yield f"data: {incident.model_dump_json(by_alias=True)}\n\n"
 
             queue = await app.state.broker.subscribe()
@@ -115,7 +134,15 @@ def create_app(
     @app.post("/ide/events/{incident_id}/ack", status_code=204)
     async def acknowledge_incident(incident_id: str, request: Request) -> Response:
         _verify_ide_request(request, app.state.settings)
-        updated = await app.state.store.acknowledge(incident_id)
+        updated = await app.state.store.mark_reviewed(incident_id)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Incident not found.")
+        return Response(status_code=204)
+
+    @app.post("/ide/events/{incident_id}/review", status_code=204)
+    async def review_incident(incident_id: str, request: Request) -> Response:
+        _verify_ide_request(request, app.state.settings)
+        updated = await app.state.store.mark_reviewed(incident_id)
         if not updated:
             raise HTTPException(status_code=404, detail="Incident not found.")
         return Response(status_code=204)
