@@ -1,0 +1,23 @@
+<idea-plugin>
+    <id>dev.secureloop.plugin</id>
+    <name>SecureLoop</name>
+    <vendor email="hello@secureloop.dev">SecureLoop</vendor>
+    <description>
+        Surfaces signed Sentry incidents in the IDE, maps them to local project files, and highlights the affected line before any AI analysis starts.
+    </description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+            id="SecureLoop"
+            anchor="right"
+            factoryClass="dev.secureloop.plugin.ui.SecureLoopToolWindowFactory"
+            secondary="false"/>
+        <notificationGroup
+            id="SecureLoop Alerts"
+            displayType="BALLOON"
+            isLogByDefault="true"/>
+        <postStartupActivity implementation="dev.secureloop.plugin.services.SecureLoopStartupActivity"/>
+    </extensions>
+</idea-plugin>

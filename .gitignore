@@ -32,6 +32,9 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+.gradle/
+build/
+.intellijPlatform/
 
 # Output artifacts (generated during runs)
 out/
