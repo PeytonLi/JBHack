@@ -8,6 +8,9 @@ data class AgentHealthResponse(
     val sqlitePath: String? = null,
     val ideTokenFile: String? = null,
     val allowDebugEndpoints: Boolean = false,
+    val openIncidentCount: Int = 0,
+    val reviewedIncidentCount: Int = 0,
+    val totalIncidentCount: Int = 0,
 )
 
 sealed interface AgentConnectionState {

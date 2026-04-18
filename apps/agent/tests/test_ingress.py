@@ -108,6 +108,7 @@ async def test_debug_endpoint_creates_live_incident(app) -> None:
 
 @pytest.mark.asyncio
 async def test_health_reports_demo_mode(app) -> None:
+    await app.state.store.initialize()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/health")

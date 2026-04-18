@@ -39,6 +39,8 @@ dependencies {
 }
 
 intellijPlatform {
+    instrumentCode = false
+
     pluginConfiguration {
         name = "SecureLoop"
         ideaVersion {
