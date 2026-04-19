@@ -11,7 +11,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)](https://nextjs.org)
 [![OpenAI](https://img.shields.io/badge/OpenAI-Codex-412991?logo=openai&logoColor=white)](https://openai.com)
 
-*Built at JetBrains Hackathon 2026 — San Francisco*
+*Built at JetBrains Codex Hackathon 2026 — San Francisco*
 
 </div>
 
@@ -241,13 +241,13 @@ The full automated cycle — write → scan → fix → ship → verify — is w
 
 ## Team
 
-Built at **JetBrains Hackathon 2026** in San Francisco.
+Built at **JetBrains Codex Hackathon 2026** in San Francisco.
 
 | | |
 |--|--|
-| **Abhiram Sribhashyam** | Agent backend · Codex integration · module architecture |
-| **Rahul Marri** | Vulnerable code checker · security-policy remediation · OWASP & CWE integration |
-| **Peyton Li** | JetBrains plugin · Sentry ingestion · SSE streaming |
+| **Abhiram Sribhashyam** | Agent backend | Codex integration | module architecture |
+| **Rahul Marri** | Dashboard & Frontend | Vulnerable code checker | security-policy.md | OWASP & CWE integration |
+| **Peyton Li** | JetBrains plugin | Sentry ingestion | SSE streaming |
 
 ---
 
