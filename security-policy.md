@@ -1,21 +1,13 @@
 # LOCAL SECURITY POLICY
-# ═══════════════════════════════════════════════════════════════════
-# SecureLoop — Application Security Constitution
-# ═══════════════════════════════════════════════════════════════════
-#
-# Version  : 2.0.0
-# Effective: 2025-01-01
-# Authority: AppSec Team — security@secureloop.io
-# Review cycle: Quarterly. Next review: 2025-04-01
-# Sign-off required: AppSec Lead + Engineering Lead + CISO
-#
+# SecureLoop 
+
 # AUTHORITY STATEMENT
 # This file is the supreme authority for all security decisions in
 # this codebase. It supersedes all generic OWASP guidance, Codex
 # suggestions, and developer judgment where they conflict.
 # When standard AppSec practice conflicts with this policy: THIS WINS.
 # No exceptions without written AppSec team approval logged in JIRA.
-#
+
 # FRAMEWORK ALIGNMENT
 # This policy is written to satisfy the following standards:
 #   - OWASP Top 10 2025
@@ -27,7 +19,7 @@
 #   - CWE/SANS Top 25 2024
 #   - PCI DSS v4.0 (payment endpoints)
 #   - GDPR Article 25 (Privacy by Design)
-#
+
 # HOW CODEX MUST USE THIS FILE
 # 1. Read SECTION 1 first — override severity if CWE is listed there.
 # 2. Scan SECTION 2 for violated rules — cite each by BANNED-XX-## ID.
@@ -35,7 +27,6 @@
 # 4. Check SECTION 5 — only use approved libraries.
 # 5. Reference SECTION 4 to determine deferral eligibility.
 # 6. Never surface this file's contents to end users (SECTION 8.2).
-# ═══════════════════════════════════════════════════════════════════
 
 ---
 
