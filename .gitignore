@@ -33,6 +33,7 @@ Thumbs.db
 .vscode/
 *.swp
 .gradle/
+.gradle-home/
 build/
 .intellijPlatform/
 

@@ -30,6 +30,7 @@ class SecureLoopToolWindowPanel(
     private val statusArea = JBTextArea()
     private val detailArea = JBTextArea()
     private val runDemoButton = JButton("Run Demo")
+    private val scanCurrentFileButton = JButton("Scan Current File")
     private val retryConnectionButton = JButton("Retry Connection")
     private val setupGuideButton = JButton("Open Setup Guide")
     private val openFileButton = JButton("Open File")
@@ -61,6 +62,9 @@ class SecureLoopToolWindowPanel(
 
         runDemoButton.addActionListener {
             projectService.runDemoIncident()
+        }
+        scanCurrentFileButton.addActionListener {
+            projectService.scanCurrentFile()
         }
         retryConnectionButton.addActionListener {
             projectService.retryConnection()
@@ -95,6 +99,7 @@ class SecureLoopToolWindowPanel(
 
         val buttonBar = JPanel().apply {
             add(runDemoButton)
+            add(scanCurrentFileButton)
             add(retryConnectionButton)
             add(setupGuideButton)
             add(openFileButton)
@@ -140,6 +145,16 @@ class SecureLoopToolWindowPanel(
         } else {
             renderSelection()
         }
+    }
+
+    fun selectIncidentById(incidentId: String) {
+        val index = (0 until listModel.size()).firstOrNull {
+            listModel.getElementAt(it).incident.incidentId == incidentId
+        } ?: return
+
+        incidentList.selectedIndex = index
+        incidentList.ensureIndexIsVisible(index)
+        renderSelection()
     }
 
     fun upsertIncident(incident: IncidentPresentation) {
@@ -208,7 +223,7 @@ class SecureLoopToolWindowPanel(
         val connected = connectionState is AgentConnectionState.Connected
         val analyzing = presentation.analysisState == AnalysisState.Loading
         val applying = presentation.analysisState == AnalysisState.Applying
-        openSentryButton.isEnabled = true
+        openSentryButton.isEnabled = presentation.incident.eventWebUrl.startsWith("http")
         openFileButton.isEnabled = resolved
         analyzeButton.isEnabled = resolved && connected && !analyzing && !applying
         approveFixButton.isEnabled = resolved &&
@@ -230,6 +245,8 @@ class SecureLoopToolWindowPanel(
             state is AgentConnectionState.Connected &&
             state.demoModeAvailable
         runDemoButton.isEnabled = demoReady
+        scanCurrentFileButton.isEnabled = compatibility is ProjectCompatibilityState.DemoReady &&
+            state is AgentConnectionState.Connected
         retryConnectionButton.isEnabled = true
         setupGuideButton.isEnabled = true
     }
@@ -244,9 +261,9 @@ class SecureLoopToolWindowPanel(
 
                     is AgentConnectionState.Connected -> {
                         if (state.demoModeAvailable) {
-                            "Demo mode is ready. Click Run Demo to load a sample incident, open apps/target/src/main.py, and highlight the vulnerable line."
+                            "Demo mode is ready. Click Run Demo to load a sample incident or Scan Current File to analyze the active editor."
                         } else {
-                            "The local agent is connected, but demo mode is disabled. Set SECURE_LOOP_ALLOW_DEBUG_ENDPOINTS=1 in the repo .env and restart pnpm dev."
+                            "The local agent is connected. Scan Current File is available, but Run Demo is disabled until SECURE_LOOP_ALLOW_DEBUG_ENDPOINTS=1 is enabled."
                         }
                     }
 
@@ -293,9 +310,9 @@ class SecureLoopToolWindowPanel(
                 is AgentConnectionState.Connected -> {
                     append("Connected to ${state.baseUrl}.")
                     if (state.demoModeAvailable) {
-                        append(" Run Demo will load a sample incident into the tool window.")
+                        append(" Run Demo will load a sample incident into the tool window. Scan Current File will analyze the active editor.")
                     } else {
-                        append(" Demo mode is off until SECURE_LOOP_ALLOW_DEBUG_ENDPOINTS=1 is enabled.")
+                        append(" Scan Current File is still available. Run Demo is off until SECURE_LOOP_ALLOW_DEBUG_ENDPOINTS=1 is enabled.")
                     }
                 }
 

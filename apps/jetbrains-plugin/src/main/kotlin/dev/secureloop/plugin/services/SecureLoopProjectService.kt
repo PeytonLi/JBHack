@@ -99,6 +99,113 @@ class SecureLoopProjectService(
         upsertIncident(presentation.copy(reviewed = true))
     }
 
+    fun scanCurrentFile() {
+        if (connectionState !is AgentConnectionState.Connected) {
+            presentLocalScanError("SecureLoop is not connected to the local agent.")
+            return
+        }
+
+        if (projectCompatibility !is ProjectCompatibilityState.DemoReady) {
+            presentLocalScanError("Open the SecureLoop demo repo before scanning the current file.")
+            return
+        }
+
+        val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: run {
+            presentLocalScanError("Open a file in the SecureLoop demo repo before scanning.")
+            return
+        }
+
+        val file = FileDocumentManager.getInstance().getFile(editor.document) ?: run {
+            presentLocalScanError("SecureLoop could not resolve the active editor file.")
+            return
+        }
+
+        val repoRelativePath = repoRelativePathFor(file.path) ?: run {
+            presentLocalScanError(
+                "SecureLoop could not determine a repo-relative path for the active file.",
+                absoluteFilePath = file.path,
+            )
+            return
+        }
+
+        val fileText = currentFileText(file) ?: run {
+            presentLocalScanError(
+                "SecureLoop could not read the active file.",
+                repoRelativePath = repoRelativePath,
+                absoluteFilePath = file.path,
+            )
+            return
+        }
+
+        val caretLine = (editor.caretModel.primaryCaret.logicalPosition.line + 1).coerceAtLeast(1)
+        val scanTarget = chooseScanTarget(fileText, caretLine)
+        val lineNumber = scanTarget.lineNumber
+
+        val sourceContext = collectSourceContext(fileText, lineNumber) ?: run {
+            presentLocalScanError(
+                "SecureLoop could not collect source context from the active file.",
+                repoRelativePath = repoRelativePath,
+                absoluteFilePath = file.path,
+                lineNumber = lineNumber,
+            )
+            return
+        }
+
+        val policyText = readPolicyText() ?: run {
+            presentLocalScanError(
+                "SecureLoop could not read security-policy.md from the project root.",
+                repoRelativePath = repoRelativePath,
+                absoluteFilePath = file.path,
+                lineNumber = lineNumber,
+            )
+            return
+        }
+
+        val incidentId = localScanIncidentId(repoRelativePath)
+        val incident = createLocalScanIncident(
+            incidentId = incidentId,
+            file = file,
+            repoRelativePath = repoRelativePath,
+            lineNumber = lineNumber,
+            sourceContext = sourceContext,
+            scanReason = scanTarget.reason,
+        )
+
+        upsertIncident(
+            IncidentPresentation(
+                incident = incident,
+                resolution = ResolutionState.Resolved(file.path, lineNumber),
+                analysisState = AnalysisState.Loading,
+            ),
+        )
+        focusIncidentAsync(incidentId)
+
+        service<SecureLoopApplicationService>().analyzeIncident(
+            payload = AnalyzeIncidentRequest(
+                incidentId = incidentId,
+                repoRelativePath = repoRelativePath,
+                lineNumber = lineNumber,
+                exceptionType = incident.exceptionType,
+                exceptionMessage = incident.exceptionMessage,
+                title = incident.title,
+                sourceContext = sourceContext,
+                policyText = policyText,
+            ),
+            onSuccess = { analysis ->
+                updateIncident(incidentId) {
+                    it.copy(
+                        analysis = analysis,
+                        analysisState = AnalysisState.Ready,
+                        analysisError = null,
+                    )
+                }
+            },
+            onError = { message ->
+                failAnalysis(incidentId, message)
+            },
+        )
+    }
+
     fun analyzeSelection(presentation: IncidentPresentation) {
         val resolved = presentation.resolution as? ResolutionState.Resolved ?: return
         if (connectionState !is AgentConnectionState.Connected) {
@@ -316,9 +423,56 @@ class SecureLoopProjectService(
         }
     }
 
+    private fun presentLocalScanError(
+        message: String,
+        repoRelativePath: String? = null,
+        absoluteFilePath: String? = null,
+        lineNumber: Int? = null,
+    ) {
+        val incidentId = localScanIncidentId(repoRelativePath)
+        val incident = NormalizedIncident(
+            incidentId = incidentId,
+            sentryEventId = incidentId,
+            issueId = incidentId,
+            projectSlug = project.name,
+            environment = "local-scan",
+            title = "Pre-Commit Scan",
+            exceptionType = "LocalScan",
+            exceptionMessage = message,
+            repoRelativePath = repoRelativePath,
+            originalFramePath = absoluteFilePath,
+            lineNumber = lineNumber,
+            functionName = null,
+            codeContext = null,
+            eventWebUrl = "about:blank",
+            receivedAt = java.time.Instant.now().toString(),
+        )
+        val resolution = if (absoluteFilePath != null && lineNumber != null) {
+            ResolutionState.Resolved(absoluteFilePath, lineNumber)
+        } else {
+            ResolutionState.Unresolved(message)
+        }
+
+        upsertIncident(
+            IncidentPresentation(
+                incident = incident,
+                resolution = resolution,
+                analysisState = AnalysisState.Failed,
+                analysisError = message,
+            ),
+        )
+        focusIncidentAsync(incidentId)
+    }
+
     private fun updateEnvironment() {
         ApplicationManager.getApplication().invokeLater {
             panel?.updateEnvironment(connectionState, projectCompatibility)
+        }
+    }
+
+    private fun focusIncidentAsync(incidentId: String) {
+        ApplicationManager.getApplication().invokeLater {
+            panel?.selectIncidentById(incidentId)
         }
     }
 
@@ -395,8 +549,23 @@ class SecureLoopProjectService(
         }
     }
 
+    private fun repoRelativePathFor(filePath: String): String? {
+        val basePath = project.basePath ?: return null
+        val root = Path.of(basePath).normalize()
+        val absolutePath = Path.of(filePath).normalize()
+        return try {
+            normalizePath(root.relativize(absolutePath).toString())
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
+
     private fun collectSourceContext(file: VirtualFile, lineNumber: Int): String? {
         val text = currentFileText(file) ?: return null
+        return collectSourceContext(text, lineNumber)
+    }
+
+    private fun collectSourceContext(text: String, lineNumber: Int): String? {
         val lines = text.lines()
         if (lines.isEmpty()) {
             return text
@@ -420,6 +589,61 @@ class SecureLoopProjectService(
         }
     }
 
+    private data class LocalScanTarget(
+        val lineNumber: Int,
+        val reason: String,
+    )
+
+    private data class LocalScanPattern(
+        val needle: String,
+        val reason: String,
+    )
+
+    private fun chooseScanTarget(fileText: String, caretLine: Int): LocalScanTarget {
+        val detectedTarget = detectHighConfidenceFinding(fileText)
+        if (detectedTarget != null) {
+            return detectedTarget
+        }
+
+        return LocalScanTarget(
+            lineNumber = caretLine,
+            reason = "No high-confidence pattern was detected automatically; scanning the current caret line.",
+        )
+    }
+
+    private fun detectHighConfidenceFinding(fileText: String): LocalScanTarget? {
+        val patterns = listOf(
+            LocalScanPattern(
+                needle = "WAREHOUSES[warehouse_id]",
+                reason = "Detected unchecked warehouse lookup that can raise an unhandled KeyError.",
+            ),
+            LocalScanPattern(
+                needle = "shell=True",
+                reason = "Detected shell command execution that should be reviewed for injection risk.",
+            ),
+            LocalScanPattern(
+                needle = "eval(",
+                reason = "Detected dynamic code execution that should be reviewed before commit.",
+            ),
+            LocalScanPattern(
+                needle = "exec(",
+                reason = "Detected dynamic code execution that should be reviewed before commit.",
+            ),
+        )
+
+        fileText.lines().forEachIndexed { index, line ->
+            val matchedPattern = patterns.firstOrNull { pattern -> line.contains(pattern.needle) }
+            if (matchedPattern != null) {
+                return LocalScanTarget(
+                    lineNumber = index + 1,
+                    reason = matchedPattern.reason,
+                )
+            }
+        }
+
+        return null
+    }
+
     private fun readPolicyText(): String? {
         val basePath = project.basePath ?: return null
         val policyPath = Path.of(basePath).resolve("security-policy.md").normalize()
@@ -441,6 +665,42 @@ class SecureLoopProjectService(
         return normalizedPatchPath == normalizedIncidentPath ||
             normalizedResolvedPath.endsWith("/$normalizedPatchPath") ||
             normalizedResolvedPath == normalizedPatchPath
+    }
+
+    private fun localScanIncidentId(repoRelativePath: String?): String {
+        val normalized = repoRelativePath?.takeIf { it.isNotBlank() }?.let(::normalizePath)
+        return if (normalized.isNullOrBlank()) {
+            "local-scan:error"
+        } else {
+            "local-scan:$normalized"
+        }
+    }
+
+    private fun createLocalScanIncident(
+        incidentId: String,
+        file: VirtualFile,
+        repoRelativePath: String,
+        lineNumber: Int,
+        sourceContext: String,
+        scanReason: String,
+    ): NormalizedIncident {
+        return NormalizedIncident(
+            incidentId = incidentId,
+            sentryEventId = incidentId,
+            issueId = incidentId,
+            projectSlug = project.name,
+            environment = "local-scan",
+            title = "Pre-Commit Scan",
+            exceptionType = "LocalScan",
+            exceptionMessage = scanReason,
+            repoRelativePath = repoRelativePath,
+            originalFramePath = file.path,
+            lineNumber = lineNumber,
+            functionName = null,
+            codeContext = sourceContext,
+            eventWebUrl = file.url,
+            receivedAt = java.time.Instant.now().toString(),
+        )
     }
 
     private fun normalizePath(path: String): String {
