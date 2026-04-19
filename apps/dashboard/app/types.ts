@@ -43,3 +43,9 @@ export type AgentHealthResponse = {
   reviewedIncidentCount: number;
   totalIncidentCount: number;
 };
+
+export type NavigateResponse = {
+  delivered: boolean;
+  subscribers: number;
+  incidentId: string;
+};

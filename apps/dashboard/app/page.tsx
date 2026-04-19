@@ -1,156 +1,381 @@
-import { IncidentStream } from "./incident-stream";
-import type {
-  AgentHealthResponse,
-  IncidentFeedResponse,
-} from "./types";
+"use client";
 
-export const dynamic = "force-dynamic";
+import { motion } from "framer-motion";
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  ExternalLink,
+  RefreshCw,
+  Shield,
+  Zap,
+} from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { IncidentStream } from "./incident-stream";
+import type { AgentHealthResponse, IncidentFeedResponse, IncidentRecord } from "./types";
+
+const agentBaseUrl =
+  typeof window !== "undefined"
+    ? (process.env.NEXT_PUBLIC_SECURE_LOOP_AGENT_URL?.trim() ||
+      "http://127.0.0.1:8001")
+    : "http://127.0.0.1:8001";
+
+/* ── animation orchestration ──────────────────────────── */
+const stagger = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.1, delayChildren: 0.15 } },
+};
+
+const fadeUp = {
+  hidden: { opacity: 0, y: 24, filter: "blur(6px)" },
+  visible: {
+    opacity: 1,
+    y: 0,
+    filter: "blur(0px)",
+    transition: { duration: 0.6, ease: [0.22, 1, 0.36, 1] },
+  },
+};
+
+const scaleIn = {
+  hidden: { opacity: 0, scale: 0.92 },
+  visible: {
+    opacity: 1,
+    scale: 1,
+    transition: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
+  },
+};
 
 type DashboardData = {
   health: AgentHealthResponse | null;
   feed: IncidentFeedResponse | null;
   error: string | null;
-  agentBaseUrl: string;
 };
 
-const agentBaseUrl =
-  process.env.SECURE_LOOP_AGENT_URL?.trim() || "http://127.0.0.1:8001";
+export default function Home() {
+  const [data, setData] = useState<DashboardData>({
+    health: null,
+    feed: null,
+    error: null,
+  });
+  const [loading, setLoading] = useState(true);
+  const [liveRecords, setLiveRecords] = useState<IncidentRecord[]>([]);
 
-async function fetchDashboardData(): Promise<DashboardData> {
-  try {
-    const [healthResponse, feedResponse] = await Promise.all([
-      fetch(`${agentBaseUrl}/health`, {
-        cache: "no-store",
-        headers: { Accept: "application/json" },
-      }),
-      fetch(`${agentBaseUrl}/incidents?status=all&limit=40`, {
-        cache: "no-store",
-        headers: { Accept: "application/json" },
-      }),
-    ]);
+  const fetchData = useCallback(async () => {
+    try {
+      const [healthRes, feedRes] = await Promise.all([
+        fetch(`${agentBaseUrl}/health`, {
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        }),
+        fetch(`${agentBaseUrl}/incidents?status=all&limit=40`, {
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        }),
+      ]);
 
-    if (!healthResponse.ok || !feedResponse.ok) {
-      return {
+      if (!healthRes.ok || !feedRes.ok) {
+        setData({
+          health: null,
+          feed: null,
+          error: `Agent responded with HTTP ${healthRes.status}/${feedRes.status}`,
+        });
+      } else {
+        setData({
+          health: (await healthRes.json()) as AgentHealthResponse,
+          feed: (await feedRes.json()) as IncidentFeedResponse,
+          error: null,
+        });
+      }
+    } catch {
+      setData({
         health: null,
         feed: null,
-        error: `SecureLoop agent responded with HTTP ${healthResponse.status}/${feedResponse.status}.`,
-        agentBaseUrl,
-      };
+        error: "Cannot reach SecureLoop agent — start `pnpm dev` first.",
+      });
+    } finally {
+      setLoading(false);
     }
+  }, []);
 
-    return {
-      health: (await healthResponse.json()) as AgentHealthResponse,
-      feed: (await feedResponse.json()) as IncidentFeedResponse,
-      error: null,
-      agentBaseUrl,
-    };
-  } catch {
-    return {
-      health: null,
-      feed: null,
-      error:
-        "The dashboard could not reach the local SecureLoop agent. Start `pnpm dev` first.",
-      agentBaseUrl,
-    };
-  }
-}
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
-export default async function Home() {
-  const { health, feed, error, agentBaseUrl } = await fetchDashboardData();
+  const { health, feed, error } = data;
+
+  // Compute live stats from the records (SSE-updated)
+  const openCount = liveRecords.filter((r) => r.status === "open").length;
+  const reviewedCount = liveRecords.filter((r) => r.status === "reviewed").length;
+  const totalCount = liveRecords.length;
+
+  // Use live counts if available, fall back to feed summary
+  const displayOpen = totalCount > 0 ? openCount : (feed?.summary.openCount ?? 0);
+  const displayReviewed = totalCount > 0 ? reviewedCount : (feed?.summary.reviewedCount ?? 0);
+  const displayTotal = totalCount > 0 ? totalCount : (feed?.summary.totalCount ?? 0);
+
+  const stats = [
+    {
+      label: "Open",
+      value: displayOpen,
+      icon: AlertTriangle,
+      color: "text-red-400",
+      glow: "rgba(239, 68, 68, 0.15)",
+      gradient: "from-red-500/20 to-red-900/10",
+    },
+    {
+      label: "Reviewed",
+      value: displayReviewed,
+      icon: CheckCircle2,
+      color: "text-emerald-400",
+      glow: "rgba(16, 185, 129, 0.15)",
+      gradient: "from-emerald-500/20 to-emerald-900/10",
+    },
+    {
+      label: "Total",
+      value: displayTotal,
+      icon: Activity,
+      color: "text-cyan-400",
+      glow: "rgba(34, 211, 238, 0.15)",
+      gradient: "from-cyan-500/20 to-cyan-900/10",
+    },
+  ];
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.18),transparent_32%),linear-gradient(180deg,#020617_0%,#0f172a_52%,#111827_100%)] text-slate-100">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-10 px-6 py-12 lg:px-10">
-        <section className="grid gap-6 lg:grid-cols-[1.5fr_1fr]">
-          <div className="rounded-[2rem] border border-white/10 bg-slate-950/55 p-8 shadow-[0_30px_100px_rgba(15,23,42,0.45)] backdrop-blur">
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-cyan-300">
-              SecureLoop Dashboard
-            </p>
-            <h1 className="mt-4 max-w-3xl text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-              Local incident queue and review state for the current SecureLoop
-              MVP.
+    <main className="relative min-h-screen bg-[#050a18] text-slate-100">
+      {/* ── Background gradient orbs ──────────────────── */}
+      <div className="gradient-orb gradient-orb-cyan w-[600px] h-[600px] -top-[200px] -left-[100px] fixed" />
+      <div
+        className="gradient-orb gradient-orb-violet w-[500px] h-[500px] top-[40%] -right-[150px] fixed"
+        style={{ animationDelay: "-7s" }}
+      />
+      <div
+        className="gradient-orb gradient-orb-rose w-[400px] h-[400px] bottom-[10%] left-[30%] fixed"
+        style={{ animationDelay: "-14s" }}
+      />
+
+      {/* ── Subtle grid pattern ───────────────────────── */}
+      <div
+        className="fixed inset-0 pointer-events-none z-0"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)",
+          backgroundSize: "64px 64px",
+        }}
+      />
+
+      {/* ── Top nav bar ───────────────────────────────── */}
+      <motion.nav
+        initial={{ opacity: 0, y: -16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+        className="fixed top-0 left-0 right-0 z-50 border-b border-white/[0.06]"
+      >
+        <div className="nav-glass mx-auto flex items-center justify-between max-w-7xl px-6 py-3 lg:px-10">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500/20 to-violet-500/20 border border-cyan-500/20">
+              <Shield className="w-4 h-4 text-cyan-400" />
+            </div>
+            <span className="text-sm font-bold tracking-tight text-white">
+              SecureLoop
+            </span>
+            <span className="hidden sm:inline text-[0.6rem] font-semibold uppercase tracking-[0.2em] text-slate-600 ml-1">
+              Dashboard
+            </span>
+          </div>
+          <div className="flex items-center gap-4">
+            <span
+              className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-[0.65rem] font-semibold ${
+                health?.status === "ok"
+                  ? "border border-emerald-500/20 bg-emerald-500/8 text-emerald-400"
+                  : "border border-slate-700 bg-slate-800/50 text-slate-500"
+              }`}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  health?.status === "ok"
+                    ? "bg-emerald-400 pulse-live"
+                    : "bg-slate-500"
+                }`}
+              />
+              {health?.status === "ok" ? "Agent Online" : "Agent Offline"}
+            </span>
+          </div>
+        </div>
+      </motion.nav>
+
+      {/* ── Top gradient line ─────────────────────────── */}
+      <div className="fixed top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-cyan-500/40 to-transparent z-[60]" />
+
+      <div className="relative z-10 mx-auto flex w-full max-w-7xl flex-col gap-10 px-6 pt-20 pb-14 lg:px-10">
+        {/* ── Header ──────────────────────────────────── */}
+        <motion.header
+          variants={stagger}
+          initial="hidden"
+          animate="visible"
+          className="grid gap-8 lg:grid-cols-[1.6fr_1fr]"
+        >
+          {/* Hero card */}
+          <motion.div variants={fadeUp} className="hero-card p-8 lg:p-10">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/15 to-violet-500/15 border border-cyan-500/20 shadow-[0_0_20px_rgba(34,211,238,0.1)]">
+                <Shield className="w-5 h-5 text-cyan-400" />
+              </div>
+              <span className="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-400/80">
+                SecureLoop
+              </span>
+            </div>
+            <h1 className="max-w-2xl text-4xl font-bold tracking-tight text-white sm:text-5xl leading-[1.1]">
+              <span className="text-gradient">Incident Command</span>{" "}
+              <br className="hidden sm:block" />
+              Center
             </h1>
-            <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
-              This dashboard reflects the real companion service contract: raw
-              incidents in, human review in the IDE, reviewed history retained
-              in the local queue. It does not pretend the AI analysis pipeline
-              exists yet.
+            <p className="mt-5 max-w-xl text-base leading-7 text-slate-400">
+              Real-time incident queue with AI-powered triage. Raw incidents
+              flow in, human review happens in the IDE, and reviewed history
+              is retained in the local queue.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <a
-                className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-5 py-3 text-sm font-semibold text-cyan-100 transition hover:border-cyan-200/60 hover:bg-cyan-300/20"
-                href="/"
+              <motion.button
+                onClick={() => {
+                  setLoading(true);
+                  fetchData();
+                }}
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                className="btn-glow flex items-center gap-2 rounded-full bg-gradient-to-r from-cyan-500/20 to-violet-500/20 border border-cyan-400/25 px-6 py-3 text-sm font-semibold text-cyan-100 transition-all hover:border-cyan-300/50 cursor-pointer"
               >
+                <RefreshCw
+                  className={`w-4 h-4 ${loading ? "animate-spin" : ""}`}
+                />
                 Refresh Dashboard
-              </a>
-              <a
-                className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:border-white/20 hover:bg-white/10"
+              </motion.button>
+              <motion.a
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-6 py-3 text-sm font-semibold text-slate-300 transition hover:border-white/20 hover:bg-white/[0.06] cursor-pointer"
                 href="https://www.jetbrains.com/help/idea/run-debug-configuration-gradle.html"
                 target="_blank"
                 rel="noreferrer"
               >
-                Run `runIde`
-              </a>
+                <Zap className="w-4 h-4" />
+                Run <code className="font-mono text-xs text-white/70">runIde</code>
+              </motion.a>
             </div>
-          </div>
+          </motion.div>
 
-          <div className="grid gap-4">
-            <div className="rounded-[2rem] border border-white/10 bg-white/5 p-6 backdrop-blur">
-              <p className="text-xs uppercase tracking-[0.24em] text-slate-400">
-                Agent
-              </p>
-              <h2 className="mt-3 text-2xl font-semibold text-white">
-                {health?.status === "ok" ? "Connected" : "Unavailable"}
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-slate-300">
-                {error ?? `Polling ${agentBaseUrl} for health and incident data.`}
-              </p>
-              <p className="mt-4 text-xs uppercase tracking-[0.24em] text-slate-500">
-                Demo mode
-              </p>
-              <p className="mt-2 text-sm text-slate-200">
-                {health?.allowDebugEndpoints
-                  ? "Enabled for Run Demo and debug incident injection."
-                  : "Disabled until SECURE_LOOP_ALLOW_DEBUG_ENDPOINTS=1 is set."}
-              </p>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-3">
-              {[
-                {
-                  label: "Open incidents",
-                  value: feed?.summary.openCount ?? 0,
-                  accent: "text-red-200",
-                },
-                {
-                  label: "Reviewed incidents",
-                  value: feed?.summary.reviewedCount ?? 0,
-                  accent: "text-emerald-200",
-                },
-                {
-                  label: "Total incidents",
-                  value: feed?.summary.totalCount ?? 0,
-                  accent: "text-cyan-100",
-                },
-              ].map((stat) => (
-                <div
-                  key={stat.label}
-                  className="rounded-[1.75rem] border border-white/10 bg-slate-950/55 p-5"
+          {/* Status panel */}
+          <motion.div variants={fadeUp} className="flex flex-col gap-4">
+            {/* Connection status */}
+            <div className="glass-card p-6 flex-1">
+              <div className="flex items-center justify-between">
+                <p className="text-[0.65rem] font-semibold uppercase tracking-[0.28em] text-slate-500">
+                  Agent Status
+                </p>
+                <span
+                  className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ${
+                    health?.status === "ok"
+                      ? "border border-emerald-500/25 bg-emerald-500/10 text-emerald-400"
+                      : "border border-red-500/25 bg-red-500/10 text-red-400"
+                  }`}
                 >
-                  <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
-                    {stat.label}
-                  </p>
-                  <p className={`mt-3 text-3xl font-semibold ${stat.accent}`}>
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      health?.status === "ok"
+                        ? "bg-emerald-400 pulse-live"
+                        : "bg-red-400"
+                    }`}
+                  />
+                  {health?.status === "ok" ? "Connected" : "Unavailable"}
+                </span>
+              </div>
+              <p className="mt-4 text-sm leading-6 text-slate-400">
+                {error ??
+                  `Polling ${agentBaseUrl} for health and incident data.`}
+              </p>
+              <div className="mt-4 flex items-center gap-2">
+                <span className="text-[0.6rem] font-semibold uppercase tracking-[0.28em] text-slate-600">
+                  Demo mode
+                </span>
+                <span
+                  className={`rounded-full px-2.5 py-0.5 text-[0.65rem] font-semibold ${
+                    health?.allowDebugEndpoints
+                      ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                      : "bg-slate-800/80 text-slate-500 border border-slate-700/50"
+                  }`}
+                >
+                  {health?.allowDebugEndpoints ? "Enabled" : "Disabled"}
+                </span>
+              </div>
+            </div>
+
+            {/* Stat cards */}
+            <div className="grid gap-3 grid-cols-3">
+              {stats.map((stat, i) => (
+                <motion.div
+                  key={stat.label}
+                  variants={scaleIn}
+                  custom={i}
+                  whileHover={{
+                    scale: 1.04,
+                    transition: { duration: 0.2 },
+                  }}
+                  className="stat-card p-4 backdrop-blur-xl cursor-default group"
+                  style={{
+                    boxShadow: `0 16px 48px -8px ${stat.glow}`,
+                  }}
+                >
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <stat.icon
+                      className={`w-3.5 h-3.5 ${stat.color} transition-transform group-hover:scale-110`}
+                      strokeWidth={2.5}
+                    />
+                    <p className="text-[0.6rem] font-semibold uppercase tracking-[0.24em] text-slate-500">
+                      {stat.label}
+                    </p>
+                  </div>
+                  <motion.p
+                    key={stat.value}
+                    initial={{ scale: 1.2, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ type: "spring", stiffness: 300, damping: 20 }}
+                    className={`text-3xl font-bold tabular-nums ${stat.color}`}
+                  >
                     {stat.value}
-                  </p>
-                </div>
+                  </motion.p>
+                </motion.div>
               ))}
             </div>
-          </div>
-        </section>
+          </motion.div>
+        </motion.header>
 
-        <IncidentStream initialFeed={feed} agentBaseUrl={agentBaseUrl} />
+        {/* ── Divider ─────────────────────────────────── */}
+        <div className="flex items-center gap-4">
+          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+          <span className="text-[0.6rem] font-semibold uppercase tracking-[0.3em] text-slate-600">
+            Incident Feed
+          </span>
+          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+        </div>
+
+        {/* ── Incident stream ─────────────────────────── */}
+        <IncidentStream
+          initialFeed={feed}
+          agentBaseUrl={agentBaseUrl}
+          onRecordsChange={setLiveRecords}
+        />
       </div>
+
+      {/* ── Footer ────────────────────────────────────── */}
+      <footer className="relative z-10 border-t border-white/[0.04] py-6">
+        <div className="mx-auto max-w-7xl px-6 lg:px-10 flex items-center justify-between">
+          <p className="text-[0.65rem] text-slate-600">
+            SecureLoop · Built for JBHack
+          </p>
+          <p className="text-[0.65rem] text-slate-700">
+            Auto-Scribe AI SRE Agent
+          </p>
+        </div>
+      </footer>
     </main>
   );
 }

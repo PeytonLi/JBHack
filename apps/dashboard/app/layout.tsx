@@ -14,8 +14,9 @@ const ibmPlexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SecureLoop Dashboard",
-  description: "Local incident queue and review state for the SecureLoop MVP",
+  title: "SecureLoop — Incident Command Center",
+  description:
+    "Real-time incident queue, AI triage, and review state for the SecureLoop platform",
 };
 
 export default function RootLayout({
@@ -28,7 +29,9 @@ export default function RootLayout({
       lang="en"
       className={`${spaceGrotesk.variable} ${ibmPlexMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="noise-overlay min-h-full flex flex-col relative">
+        {children}
+      </body>
     </html>
   );
 }
