@@ -97,18 +97,18 @@ export function derivePipelineSteps(
   return STEP_ORDER.map((id) => steps[id]);
 }
 
-type PipStyle = { bg: string; icon: typeof CheckCircle2 | null };
+type PipStyle = { bg: string; icon: typeof CheckCircle2 | null; fg: string };
 
 function pipStyle(status: PipelineStepStatus): PipStyle {
   switch (status) {
     case "running":
-      return { bg: "bg-cyan-400", icon: Loader2 };
+      return { bg: "bg-slate-900", fg: "text-white", icon: Loader2 };
     case "completed":
-      return { bg: "bg-emerald-400", icon: CheckCircle2 };
+      return { bg: "bg-emerald-500", fg: "text-white", icon: CheckCircle2 };
     case "failed":
-      return { bg: "bg-red-500", icon: AlertCircle };
+      return { bg: "bg-red-500", fg: "text-white", icon: AlertCircle };
     default:
-      return { bg: "bg-slate-600/40", icon: null };
+      return { bg: "bg-slate-200", fg: "text-slate-400", icon: null };
   }
 }
 
@@ -120,7 +120,7 @@ export function CompactPipelineBar({ steps }: { steps: PipelineStep[] }) {
   return (
     <div className="flex items-center gap-1">
       {steps.map((step, idx) => {
-        const { bg, icon: Icon } = pipStyle(step.status);
+        const { bg, fg, icon: Icon } = pipStyle(step.status);
         const showZap = onlyIngestedDone && step.id === "ingested";
         return (
           <div key={step.id} className="flex items-center gap-1">
@@ -131,16 +131,16 @@ export function CompactPipelineBar({ steps }: { steps: PipelineStep[] }) {
               title={`${step.label}: ${step.status}`}
             >
               {showZap ? (
-                <Zap className="w-2 h-2 text-slate-900" />
+                <Zap className={`w-2 h-2 ${fg}`} />
               ) : Icon ? (
                 <Icon
-                  className={`w-2 h-2 text-slate-900 ${step.status === "running" ? "animate-spin" : ""}`}
+                  className={`w-2 h-2 ${fg} ${step.status === "running" ? "animate-spin" : ""}`}
                 />
               ) : null}
             </motion.div>
             {idx < steps.length - 1 ? (
               <div
-                className={`h-px w-4 ${step.status === "completed" ? "bg-emerald-400/60" : "bg-white/10"}`}
+                className={`h-px w-3 ${step.status === "completed" ? "bg-emerald-400" : "bg-slate-200"}`}
               />
             ) : null}
           </div>
@@ -153,13 +153,13 @@ export function CompactPipelineBar({ steps }: { steps: PipelineStep[] }) {
 function statusBadge(status: PipelineStepStatus): string {
   switch (status) {
     case "running":
-      return "border-cyan-400/30 bg-cyan-500/10 text-cyan-300";
+      return "border-slate-300 bg-slate-100 text-slate-900";
     case "completed":
-      return "border-emerald-400/30 bg-emerald-500/10 text-emerald-300";
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
     case "failed":
-      return "border-red-400/30 bg-red-500/10 text-red-300";
+      return "border-red-200 bg-red-50 text-red-700";
     default:
-      return "border-white/10 bg-white/[0.02] text-slate-500";
+      return "border-slate-200 bg-white text-slate-400";
   }
 }
 
@@ -167,14 +167,14 @@ export function FullPipelineView({ steps }: { steps: PipelineStep[] }) {
   return (
     <div className="glass-card p-6">
       <div className="flex items-center justify-between mb-5">
-        <h2 className="text-sm font-bold uppercase tracking-[0.22em] text-slate-400">
+        <h2 className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
           Pipeline Progress
         </h2>
       </div>
       <ol className="space-y-3">
         <AnimatePresence initial={false}>
           {steps.map((step) => {
-            const { bg, icon: Icon } = pipStyle(step.status);
+            const { bg, fg, icon: Icon } = pipStyle(step.status);
             const isPrUrl =
               step.id === "pr_opening" &&
               step.status === "completed" &&
@@ -195,29 +195,29 @@ export function FullPipelineView({ steps }: { steps: PipelineStep[] }) {
                 >
                   {Icon ? (
                     <Icon
-                      className={`w-2 h-2 text-slate-900 ${step.status === "running" ? "animate-spin" : ""}`}
+                      className={`w-2 h-2 ${fg} ${step.status === "running" ? "animate-spin" : ""}`}
                     />
                   ) : null}
                 </div>
-                <span className="text-sm font-semibold text-white flex-1">
+                <span className="text-sm font-semibold text-slate-900 flex-1">
                   {step.label}
                 </span>
                 <span
-                  className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[0.6rem] font-bold uppercase tracking-[0.2em] ${statusBadge(step.status)}`}
+                  className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.2em] ${statusBadge(step.status)}`}
                 >
                   {step.status}
                 </span>
-                <time className="text-[0.65rem] text-slate-500 w-16 text-right tabular-nums">
+                <time className="text-[11px] text-slate-500 w-16 text-right tabular-nums">
                   {relativeTime(step.updatedAt)}
                 </time>
                 {step.detail ? (
-                  <div className="basis-full pl-6 text-xs font-mono text-slate-400">
+                  <div className="basis-full pl-6 text-xs font-mono text-slate-500">
                     {isPrUrl ? (
                       <a
                         href={step.detail}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 text-cyan-300 hover:text-cyan-200"
+                        className="inline-flex items-center gap-1.5 text-slate-900 hover:underline"
                       >
                         <ExternalLink className="w-3 h-3" />
                         {step.detail}

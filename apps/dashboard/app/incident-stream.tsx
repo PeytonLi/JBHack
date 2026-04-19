@@ -1,9 +1,10 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   Clock,
   Code2,
   Download,
@@ -11,11 +12,9 @@ import {
   Eye,
   FileCode2,
   FlaskConical,
-  FunctionSquare,
   GitPullRequest,
   Loader2,
   MapPin,
-  Radio,
   Search,
   ShieldAlert,
   ShieldCheck,
@@ -25,15 +24,15 @@ import {
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type {
+  AutopilotCompletedEvent,
+  AutopilotFailedEvent,
+  AutopilotStatus,
+  AutopilotStepEvent,
+  AutopilotStepId,
   IncidentFeedResponse,
   IncidentRecord,
   IncidentsClearedEvent,
   NavigateResponse,
-  AutopilotCompletedEvent,
-  AutopilotFailedEvent,
-  AutopilotStatus,
-  AutopilotStepId,
-  AutopilotStepEvent,
   PipelineStep,
   PipelineStepEvent,
   SentryResolutionStatus,
@@ -43,7 +42,6 @@ import {
   derivePipelineSteps,
 } from "./pipeline-progress";
 
-/* ── Props ─────────────────────────────────────────────── */
 type Props = {
   initialFeed: IncidentFeedResponse | null;
   agentBaseUrl: string;
@@ -53,7 +51,7 @@ type Props = {
 
 /* ── Helpers ───────────────────────────────────────────── */
 function formatTimestamp(value: string | null): string {
-  if (!value) return "Not yet reviewed";
+  if (!value) return "—";
   const date = new Date(value);
   return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
@@ -64,7 +62,7 @@ function formatTimestamp(value: string | null): string {
 function relativeTime(value: string): string {
   const diff = Date.now() - new Date(value).getTime();
   const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return "Just now";
+  if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
@@ -72,54 +70,25 @@ function relativeTime(value: string): string {
   return `${days}d ago`;
 }
 
-type StatusStyle = {
-  bg: string;
-  border: string;
-  text: string;
-  icon: typeof AlertTriangle;
-};
-
-function getStatusStyle(status: IncidentRecord["status"]): StatusStyle {
-  return status === "open"
-    ? {
-        bg: "bg-red-500/8",
-        border: "border-red-500/25",
-        text: "text-red-400",
-        icon: AlertTriangle,
-      }
-    : {
-        bg: "bg-emerald-500/8",
-        border: "border-emerald-500/25",
-        text: "text-emerald-400",
-        icon: CheckCircle2,
-      };
-}
-
-function getSentryStyle(
-  value: SentryResolutionStatus | null,
-): StatusStyle {
+function sentryToneClasses(value: SentryResolutionStatus | null) {
   switch (value) {
     case "resolved":
-      return {
-        bg: "bg-emerald-500/8",
-        border: "border-emerald-500/25",
-        text: "text-emerald-400",
-        icon: ShieldCheck,
-      };
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
     case "ignored":
-      return {
-        bg: "bg-slate-500/8",
-        border: "border-slate-500/25",
-        text: "text-slate-400",
-        icon: ShieldOff,
-      };
+      return "border-slate-200 bg-slate-50 text-slate-500";
     default:
-      return {
-        bg: "bg-amber-500/8",
-        border: "border-amber-500/25",
-        text: "text-amber-400",
-        icon: ShieldAlert,
-      };
+      return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+}
+
+function sentryIcon(value: SentryResolutionStatus | null) {
+  switch (value) {
+    case "resolved":
+      return ShieldCheck;
+    case "ignored":
+      return ShieldOff;
+    default:
+      return ShieldAlert;
   }
 }
 
@@ -134,50 +103,32 @@ function upsertById(
   return next;
 }
 
-/* ── Animation variants ────────────────────────────────── */
-const listStagger = {
-  hidden: {},
-  visible: {
-    transition: { staggerChildren: 0.08, delayChildren: 0.2 },
-  },
-};
-
-const cardVariant = {
-  hidden: { opacity: 0, y: 20, scale: 0.97, filter: "blur(4px)" },
-  visible: {
-    opacity: 1,
-    y: 0,
-    scale: 1,
-    filter: "blur(0px)",
-    transition: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
-  },
-  exit: {
-    opacity: 0,
-    scale: 0.95,
-    y: -10,
-    transition: { duration: 0.3 },
-  },
-};
-
-const fadeIn = {
-  hidden: { opacity: 0, y: 12 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.5, ease: [0.22, 1, 0.36, 1] },
-  },
-};
-
 function useMounted(): boolean {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   return mounted;
 }
 
-/* ── Main component ────────────────────────────────────── */
+/* ── Animation variants ────────────────────────────────── */
+const listStagger: Variants = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.05, delayChildren: 0.05 } },
+};
+
+const rowVariant: Variants = {
+  hidden: { opacity: 0, y: 8 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.35, ease: [0.22, 1, 0.36, 1] as const },
+  },
+  exit: { opacity: 0, y: -4, transition: { duration: 0.2 } },
+};
+
 type ToastKind = "success" | "info" | "error";
 type ToastState = { message: string; kind: ToastKind } | null;
 
+/* ── Main stream ───────────────────────────────────────── */
 export function IncidentStream({
   initialFeed,
   agentBaseUrl,
@@ -189,12 +140,14 @@ export function IncidentStream({
   );
   const [connected, setConnected] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);
-  const [pipelines, setPipelines] = useState<Record<string, AutopilotStatus>>({});
+  const [pipelines, setPipelines] = useState<Record<string, AutopilotStatus>>(
+    {},
+  );
   const [pipelineEvents, setPipelineEvents] = useState<
     Record<string, PipelineStepEvent[]>
   >({});
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  // Notify parent of record changes for live stat updates
   useEffect(() => {
     onRecordsChange?.(records);
   }, [records, onRecordsChange]);
@@ -204,6 +157,18 @@ export function IncidentStream({
     const timer = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  const toggleExpanded = (id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   const openInIde = async (incidentId: string) => {
     try {
@@ -230,7 +195,10 @@ export function IncidentStream({
             setToast({ message: "Launching sandbox IDE…", kind: "info" });
             break;
           case "debounced":
-            setToast({ message: "Sandbox IDE starting — please wait", kind: "info" });
+            setToast({
+              message: "Sandbox IDE starting — please wait",
+              kind: "info",
+            });
             break;
           case "gradlew-not-found":
             setToast({
@@ -240,7 +208,10 @@ export function IncidentStream({
             });
             break;
           case "spawn-error":
-            setToast({ message: "Failed to launch sandbox IDE", kind: "error" });
+            setToast({
+              message: "Failed to launch sandbox IDE",
+              kind: "error",
+            });
             break;
           case "disabled":
           default:
@@ -257,16 +228,18 @@ export function IncidentStream({
     const source = new EventSource(url);
     source.onopen = () => setConnected(true);
     source.onerror = () => setConnected(false);
+
     const handleEvent = (evt: MessageEvent) => {
       try {
         const incoming = JSON.parse(evt.data) as IncidentRecord;
         setRecords((prev) => upsertById(prev, incoming));
       } catch {
-        // Ignore malformed frames; the next snapshot on reconnect will resync.
+        // ignore
       }
     };
     source.addEventListener("incident.created", handleEvent);
     source.addEventListener("incident.updated", handleEvent);
+
     const handleCleared = (evt: MessageEvent) => {
       try {
         const cleared = JSON.parse(evt.data) as IncidentsClearedEvent;
@@ -280,10 +253,11 @@ export function IncidentStream({
           return next;
         });
       } catch {
-        // Ignore malformed frames; a refresh will resync.
+        // ignore
       }
     };
     source.addEventListener("incidents.cleared", handleCleared);
+
     const handlePipelineStep = (evt: MessageEvent) => {
       try {
         const data = JSON.parse(evt.data) as AutopilotStepEvent;
@@ -330,6 +304,7 @@ export function IncidentStream({
     source.addEventListener("pipeline.step", handlePipelineStep);
     source.addEventListener("pipeline.completed", handlePipelineCompleted);
     source.addEventListener("pipeline.failed", handlePipelineFailed);
+
     const handlePipelineProgress = (evt: MessageEvent) => {
       try {
         const ev = JSON.parse(evt.data) as PipelineStepEvent;
@@ -347,6 +322,7 @@ export function IncidentStream({
     source.addEventListener("pipeline.step", handlePipelineProgress);
     source.addEventListener("pipeline.completed", handlePipelineProgress);
     source.addEventListener("pipeline.failed", handlePipelineProgress);
+
     return () => source.close();
   }, [agentBaseUrl]);
 
@@ -361,40 +337,38 @@ export function IncidentStream({
 
   return (
     <>
-    <motion.section
-      variants={listStagger}
-      initial="hidden"
-      animate="visible"
-      className="grid gap-8 xl:grid-cols-2"
-    >
-      {/* ── Open incidents column ─────────────────────── */}
-      <div className="space-y-5">
-        <motion.div
-          variants={fadeIn}
-          className="flex items-center justify-between"
+      <motion.section
+        variants={listStagger}
+        initial="hidden"
+        animate="visible"
+        className="grid gap-6 xl:grid-cols-2"
+      >
+        {/* ── Open incidents panel ─────────────────────── */}
+        <LogPanel
+          title="Open Incidents"
+          count={openIncidents.length}
+          countLabel="active"
+          tone="danger"
+          Icon={AlertTriangle}
+          live
+          connected={connected}
+          emptyMessage={
+            <>
+              No open incidents in the queue. Trigger{" "}
+              <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
+                Run Demo
+              </code>{" "}
+              in the plugin to generate one.
+            </>
+          }
         >
-          <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-red-500/10 border border-red-500/15">
-              <AlertTriangle className="w-4 h-4 text-red-400" />
-            </div>
-            <h2 className="text-xl font-bold text-white tracking-tight">
-              Open Incidents
-            </h2>
-          </div>
-          <div className="flex items-center gap-3">
-            <LiveIndicator connected={connected} />
-            <span className="rounded-full border border-red-500/20 bg-red-500/8 px-3 py-1 text-[0.65rem] font-bold uppercase tracking-[0.22em] text-red-400 tabular-nums">
-              {openIncidents.length} active
-            </span>
-          </div>
-        </motion.div>
-
-        <AnimatePresence mode="popLayout">
-          {openIncidents.length > 0 ? (
-            openIncidents.map((record) => (
-              <IncidentCard
+          <AnimatePresence initial={false}>
+            {openIncidents.map((record) => (
+              <LogRow
                 key={record.incident.incidentId}
                 record={record}
+                expanded={expanded.has(record.incident.incidentId)}
+                onToggle={() => toggleExpanded(record.incident.incidentId)}
                 pipeline={pipelines[record.incident.incidentId]}
                 steps={derivePipelineSteps(
                   record,
@@ -403,56 +377,34 @@ export function IncidentStream({
                 autopilotEnabled={autopilotEnabled}
                 onOpenInIde={openInIde}
               />
-            ))
-          ) : (
-            <motion.div
-              variants={cardVariant}
-              initial="hidden"
-              animate="visible"
-              className="glass-card border-dashed p-8 text-center"
-            >
-              <div className="flex flex-col items-center gap-3">
-                <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-white/5 border border-white/10">
-                  <ShieldCheck className="w-5 h-5 text-slate-500" />
-                </div>
-                <p className="text-sm leading-7 text-slate-500 max-w-xs">
-                  No open incidents in the queue. Trigger{" "}
-                  <code className="font-mono text-xs text-cyan-400/60 bg-cyan-500/5 px-1.5 py-0.5 rounded">
-                    Run Demo
-                  </code>{" "}
-                  in the plugin to generate one.
-                </p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+            ))}
+          </AnimatePresence>
+        </LogPanel>
 
-      {/* ── Reviewed column ────────────────────────────── */}
-      <div className="space-y-5">
-        <motion.div
-          variants={fadeIn}
-          className="flex items-center justify-between"
+        {/* ── Reviewed history panel ───────────────────── */}
+        <LogPanel
+          title="Reviewed History"
+          count={reviewedIncidents.length}
+          countLabel="reviewed"
+          tone="success"
+          Icon={Eye}
+          emptyMessage={
+            <>
+              Reviewed incidents appear here after a developer clicks{" "}
+              <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
+                Mark Reviewed
+              </code>{" "}
+              in the IDE.
+            </>
+          }
         >
-          <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/15">
-              <Eye className="w-4 h-4 text-emerald-400" />
-            </div>
-            <h2 className="text-xl font-bold text-white tracking-tight">
-              Reviewed History
-            </h2>
-          </div>
-          <span className="rounded-full border border-emerald-500/20 bg-emerald-500/8 px-3 py-1 text-[0.65rem] font-bold uppercase tracking-[0.22em] text-emerald-400 tabular-nums">
-            {reviewedIncidents.length} reviewed
-          </span>
-        </motion.div>
-
-        <AnimatePresence mode="popLayout">
-          {reviewedIncidents.length > 0 ? (
-            reviewedIncidents.map((record) => (
-              <IncidentCard
+          <AnimatePresence initial={false}>
+            {reviewedIncidents.map((record) => (
+              <LogRow
                 key={record.incident.incidentId}
                 record={record}
+                expanded={expanded.has(record.incident.incidentId)}
+                onToggle={() => toggleExpanded(record.incident.incidentId)}
                 pipeline={pipelines[record.incident.incidentId]}
                 steps={derivePipelineSteps(
                   record,
@@ -461,81 +413,107 @@ export function IncidentStream({
                 autopilotEnabled={autopilotEnabled}
                 onOpenInIde={openInIde}
               />
-            ))
-          ) : (
-            <motion.div
-              variants={cardVariant}
-              initial="hidden"
-              animate="visible"
-              className="glass-card border-dashed p-8 text-center"
-            >
-              <div className="flex flex-col items-center gap-3">
-                <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-white/5 border border-white/10">
-                  <Clock className="w-5 h-5 text-slate-500" />
-                </div>
-                <p className="text-sm leading-7 text-slate-500 max-w-xs">
-                  Reviewed incidents appear here after a developer clicks{" "}
-                  <code className="font-mono text-xs text-cyan-400/60 bg-cyan-500/5 px-1.5 py-0.5 rounded">
-                    Mark Reviewed
-                  </code>{" "}
-                  in the IDE.
-                </p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-    </motion.section>
-    <Toast state={toast} />
+            ))}
+          </AnimatePresence>
+        </LogPanel>
+      </motion.section>
+      <Toast state={toast} />
     </>
   );
 }
 
-/* ── Toast ─────────────────────────────────────────────── */
-function Toast({ state }: { state: ToastState }) {
-  if (!state) return null;
-  const tone =
-    state.kind === "success"
-      ? "border-emerald-400/40 bg-emerald-500/20 text-emerald-50"
-      : state.kind === "error"
-        ? "border-red-400/40 bg-red-500/20 text-red-50"
-        : "border-slate-400/40 bg-slate-500/20 text-slate-50";
+/* ── Log panel wrapper ─────────────────────────────────── */
+function LogPanel({
+  title,
+  count,
+  countLabel,
+  tone,
+  Icon,
+  live,
+  connected,
+  emptyMessage,
+  children,
+}: {
+  title: string;
+  count: number;
+  countLabel: string;
+  tone: "danger" | "success";
+  Icon: typeof AlertTriangle;
+  live?: boolean;
+  connected?: boolean;
+  emptyMessage: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const iconClass =
+    tone === "danger" ? "text-red-600 bg-red-50" : "text-emerald-600 bg-emerald-50";
+  const countClass =
+    tone === "danger"
+      ? "text-red-600 border-red-200 bg-red-50"
+      : "text-emerald-600 border-emerald-200 bg-emerald-50";
+
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      className={`pointer-events-none fixed bottom-6 right-6 z-50 rounded-2xl border px-4 py-3 text-sm font-medium shadow-[0_12px_40px_rgba(15,23,42,0.5)] backdrop-blur ${tone}`}
-    >
-      {state.message}
+    <div className="log-panel">
+      <div className="log-panel-header">
+        <div className="flex items-center gap-3">
+          <span
+            className={`flex h-8 w-8 items-center justify-center rounded-lg ${iconClass}`}
+          >
+            <Icon className="h-4 w-4" strokeWidth={2.25} />
+          </span>
+          <div>
+            <h2 className="text-[15px] font-bold tracking-tight text-slate-900">
+              {title}
+            </h2>
+            <p className="text-[11px] text-slate-500">
+              {count} {countLabel} · log-style feed
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {live ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  connected ? "bg-emerald-500 pulse-live" : "bg-amber-400"
+                }`}
+              />
+              {connected ? "Live" : "Reconnecting"}
+            </span>
+          ) : null}
+          <span
+            className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-bold tabular-nums ${countClass}`}
+          >
+            {count}
+          </span>
+        </div>
+      </div>
+
+      {count === 0 ? (
+        <div className="flex items-center justify-center px-6 py-12">
+          <p className="max-w-sm text-center text-[13px] leading-6 text-slate-500">
+            {emptyMessage}
+          </p>
+        </div>
+      ) : (
+        <div>{children}</div>
+      )}
     </div>
   );
 }
 
-/* ── Live indicator ────────────────────────────────────── */
-function LiveIndicator({ connected }: { connected: boolean }) {
-  return (
-    <span className="flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.22em] text-slate-400">
-      <span
-        className={`h-1.5 w-1.5 rounded-full transition-colors ${
-          connected
-            ? "bg-emerald-400 pulse-live"
-            : "bg-amber-400"
-        }`}
-      />
-      {connected ? "Live" : "Reconnecting"}
-    </span>
-  );
-}
-
-/* ── Incident card ─────────────────────────────────────── */
-function IncidentCard({
+/* ── Log row ───────────────────────────────────────────── */
+function LogRow({
   record,
+  expanded,
+  onToggle,
   pipeline,
   steps,
   autopilotEnabled = false,
   onOpenInIde,
 }: {
   record: IncidentRecord;
+  expanded: boolean;
+  onToggle: () => void;
   pipeline?: AutopilotStatus;
   steps: PipelineStep[];
   autopilotEnabled?: boolean;
@@ -547,164 +525,258 @@ function IncidentCard({
   ]
     .filter(Boolean)
     .join(":");
-  const sentryStatus = record.incident.sentryStatus ?? "unresolved";
-  const statusStyle = getStatusStyle(record.status);
-  const sentryStyle = getSentryStyle(record.incident.sentryStatus);
-  const StatusIcon = statusStyle.icon;
-  const SentryIcon = sentryStyle.icon;
-  const canOpenInIde = Boolean(record.incident.repoRelativePath);
   const mounted = useMounted();
-  const receivedValue = mounted ? formatTimestamp(record.createdAt) : "";
-  const receivedRelative = mounted ? relativeTime(record.createdAt) : "";
-  const reviewStateValue =
-    record.status === "reviewed"
-      ? mounted
-        ? `Reviewed ${formatTimestamp(record.reviewedAt)}`
-        : "Reviewed"
-      : "Waiting for human review in the IDE";
+  const receivedLabel = mounted ? relativeTime(record.createdAt) : "";
+  const receivedFull = mounted ? formatTimestamp(record.createdAt) : "";
+
+  const isOpen = record.status === "open";
+  const accentColor = isOpen ? "#dc2626" : "#059669";
+  const canOpenInIde = Boolean(record.incident.repoRelativePath);
+  const SentryIcon = sentryIcon(record.incident.sentryStatus);
+  const sentryTone = sentryToneClasses(record.incident.sentryStatus);
+  const sentryStatus = record.incident.sentryStatus ?? "unresolved";
 
   return (
     <motion.article
       layout
-      variants={cardVariant}
+      variants={rowVariant}
       initial="hidden"
       animate="visible"
       exit="exit"
-      className="glass-card group p-5 lg:p-6 transition-all duration-300"
+      className="log-row group"
     >
-      {/* ── Top row: badges + Sentry link ──────────────  */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-3 flex-1 min-w-0">
-          {/* Badges */}
-          <div className="flex flex-wrap items-center gap-2">
+      <div
+        className="log-row-accent"
+        style={{ background: accentColor }}
+      />
+
+      {/* Row header (clickable) */}
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-start gap-3 text-left"
+      >
+        {/* Status dot */}
+        <span
+          className="mt-1.5 flex h-2 w-2 shrink-0 rounded-full"
+          style={{
+            background: accentColor,
+            boxShadow: isOpen ? "0 0 0 3px rgba(220,38,38,0.12)" : undefined,
+          }}
+        />
+
+        <div className="min-w-0 flex-1">
+          {/* Line 1 — chips + type + title */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span
-              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[0.65rem] font-bold uppercase tracking-[0.24em] ${statusStyle.bg} ${statusStyle.border} ${statusStyle.text}`}
+              className={`chip chip-mono ${sentryTone}`}
+              style={{ borderWidth: 1 }}
             >
-              <StatusIcon className="w-3 h-3" />
-              {record.status}
-            </span>
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[0.65rem] font-bold uppercase tracking-[0.24em] ${sentryStyle.bg} ${sentryStyle.border} ${sentryStyle.text}`}
-            >
-              <SentryIcon className="w-3 h-3" />
+              <SentryIcon className="h-3 w-3" />
               {sentryStatus}
             </span>
-            <span className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.22em] text-slate-500">
-              {record.incident.environment ?? "unknown env"}
+            {record.incident.environment ? (
+              <span className="chip chip-mono">
+                {record.incident.environment}
+              </span>
+            ) : null}
+            <span className="font-mono text-[12px] font-semibold text-slate-900">
+              {record.incident.exceptionType}
+            </span>
+            <span className="text-slate-300">·</span>
+            <span className="text-[13px] font-medium text-slate-700 truncate">
+              {record.incident.title}
             </span>
           </div>
 
-          {/* Title */}
-          <h3 className="text-lg font-bold text-white leading-snug tracking-tight">
-            <Link
-              href={`/session/${record.incident.incidentId}`}
-              className="hover:text-cyan-300 transition-colors"
-            >
-              <span className="text-slate-400 font-semibold">
-                {record.incident.exceptionType}
+          {/* Line 2 — location + function + time */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-slate-500">
+            <span className="inline-flex items-center gap-1.5 font-mono">
+              <MapPin className="h-3 w-3 text-slate-400" />
+              {location || "location unavailable"}
+            </span>
+            {record.incident.functionName ? (
+              <span className="inline-flex items-center gap-1.5 font-mono">
+                <Code2 className="h-3 w-3 text-slate-400" />
+                {record.incident.functionName}
               </span>
-              <span className="text-white/20 mx-2">·</span>
-              {record.incident.title}
-            </Link>
-          </h3>
-
-          {/* Exception message */}
-          <p className="max-w-2xl text-sm leading-relaxed text-slate-400">
-            {record.incident.exceptionMessage}
-          </p>
-
-          {/* Compact pipeline progress */}
-          <div className="pt-1">
-            <CompactPipelineBar steps={steps} />
+            ) : null}
+            <span
+              className="inline-flex items-center gap-1.5"
+              title={receivedFull}
+            >
+              <Clock className="h-3 w-3 text-slate-400" />
+              {receivedLabel}
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-slate-400">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em]">
+                pipeline
+              </span>
+              <CompactPipelineBar steps={steps} />
+            </span>
           </div>
         </div>
 
-        {/* Action buttons */}
-        <div className="flex items-center gap-2 shrink-0">
-          {!autopilotEnabled && (
-            <button
-              type="button"
-              disabled={!canOpenInIde || !onOpenInIde}
-              onClick={() =>
-                canOpenInIde && onOpenInIde?.(record.incident.incidentId)
-              }
-              title={
-                canOpenInIde
-                  ? "Open this file in your running JetBrains IDE"
-                  : "No repo-relative path available for this incident"
-              }
-              className="flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/8 px-4 py-2 text-xs font-semibold text-amber-300 transition-all hover:border-amber-300/40 hover:bg-amber-400/15 hover:shadow-[0_4px_20px_rgba(251,191,36,0.12)] hover:scale-[1.04] active:scale-[0.97] cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100 disabled:hover:border-amber-400/20 disabled:hover:bg-amber-400/8 disabled:hover:shadow-none"
-            >
-              <FileCode2 className="w-3.5 h-3.5" />
-              Open in IDE
-            </button>
-          )}
-          <motion.a
-            whileHover={{ scale: 1.04 }}
-            whileTap={{ scale: 0.97 }}
-            className="flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-400/8 px-4 py-2 text-xs font-semibold text-cyan-300 transition-all hover:border-cyan-300/40 hover:bg-cyan-400/15 hover:shadow-[0_4px_20px_rgba(34,211,238,0.12)] cursor-pointer"
-            href={record.incident.eventWebUrl}
-            target="_blank"
-            rel="noreferrer"
+        {/* Expand chevron */}
+        <ChevronRight
+          className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${expanded ? "rotate-90" : ""}`}
+        />
+      </button>
+
+      {/* Right-rail quick actions (always visible) */}
+      <div className="mt-3 flex flex-wrap items-center gap-2 pl-5">
+        {!autopilotEnabled ? (
+          <button
+            type="button"
+            disabled={!canOpenInIde || !onOpenInIde}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (canOpenInIde) onOpenInIde?.(record.incident.incidentId);
+            }}
+            className="btn"
+            title={
+              canOpenInIde
+                ? "Open this file in your running JetBrains IDE"
+                : "No repo-relative path available"
+            }
           >
-            <ExternalLink className="w-3.5 h-3.5" />
-            Open Sentry
-          </motion.a>
-        </div>
+            <FileCode2 className="h-3.5 w-3.5" />
+            Open in IDE
+          </button>
+        ) : null}
+        <a
+          className="btn"
+          href={record.incident.eventWebUrl}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          Sentry
+        </a>
+        <Link
+          href={`/session/${record.incident.incidentId}`}
+          className="btn btn-primary"
+          onClick={(e) => e.stopPropagation()}
+        >
+          View session
+        </Link>
       </div>
 
-      {/* ── Detail grid ────────────────────────────────── */}
-      <dl className="mt-5 grid gap-3 text-sm text-slate-400 md:grid-cols-2">
-        <DetailCell
-          icon={MapPin}
-          label="Location"
-          value={location || "Location unavailable"}
-          mono
-        />
-        <DetailCell
-          icon={FunctionSquare}
-          label="Function"
-          value={record.incident.functionName ?? "Unknown function"}
-          mono
-        />
-        <DetailCell
-          icon={Clock}
-          label="Received"
-          value={receivedValue}
-          secondary={receivedRelative}
-        />
-        <DetailCell
-          icon={Eye}
-          label="Review State"
-          value={reviewStateValue}
-        />
-      </dl>
+      {/* Expanded body */}
+      <AnimatePresence initial={false}>
+        {expanded ? (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50/60 p-4 text-[12px] sm:grid-cols-2">
+              <ExpandedField
+                label="Exception message"
+                value={record.incident.exceptionMessage}
+              />
+              <ExpandedField
+                label="Received"
+                value={receivedFull}
+                secondary={receivedLabel}
+              />
+              <ExpandedField
+                label="Review state"
+                value={
+                  record.status === "reviewed"
+                    ? `Reviewed ${formatTimestamp(record.reviewedAt)}`
+                    : "Waiting for human review in IDE"
+                }
+              />
+              <ExpandedField
+                label="Incident ID"
+                value={record.incident.incidentId}
+                mono
+              />
+            </div>
 
-      {/* ── Autopilot progress strip ───────────────────── */}
-      {autopilotEnabled && pipeline ? (
-        <PipelineStrip pipeline={pipeline} />
-      ) : null}
+            {autopilotEnabled && pipeline ? (
+              <PipelineStrip pipeline={pipeline} />
+            ) : null}
 
-      {/* ── Code context ───────────────────────────────── */}
-      {record.incident.codeContext ? (
-        <div className="mt-5 code-block overflow-hidden">
-          <div className="flex items-center gap-2 px-4 py-2.5 border-b border-amber-300/8">
-            <Code2 className="w-3.5 h-3.5 text-amber-400/60" />
-            <span className="text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-amber-400/50">
-              Code Context
-            </span>
-          </div>
-          <pre className="overflow-x-auto p-4 text-sm leading-6 text-amber-100/80 font-mono">
-            <code>{record.incident.codeContext}</code>
-          </pre>
-        </div>
-      ) : null}
+            {record.incident.codeContext ? (
+              <div className="mt-4 code-block overflow-hidden">
+                <div className="flex items-center gap-2 border-b border-white/10 px-4 py-2">
+                  <Code2 className="h-3 w-3 text-slate-400" />
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
+                    Code Context
+                  </span>
+                </div>
+                <pre className="overflow-x-auto p-4 font-mono text-[12px] leading-6 text-slate-100">
+                  <code>{record.incident.codeContext}</code>
+                </pre>
+              </div>
+            ) : null}
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </motion.article>
   );
 }
 
-/* ── Pipeline progress strip ───────────────────────────── */
-const PIPELINE_STEPS: { id: AutopilotStepId; label: string; icon: typeof Search }[] = [
+/* ── Expanded detail field ─────────────────────────────── */
+function ExpandedField({
+  label,
+  value,
+  secondary,
+  mono,
+}: {
+  label: string;
+  value: string;
+  secondary?: string;
+  mono?: boolean;
+}) {
+  return (
+    <div>
+      <p className="text-[9px] font-semibold uppercase tracking-[0.22em] text-slate-400">
+        {label}
+      </p>
+      <p
+        className={`mt-1 text-slate-900 ${mono ? "font-mono text-[11.5px]" : "text-[13px] leading-5"}`}
+      >
+        {value}
+      </p>
+      {secondary ? (
+        <p className="mt-0.5 text-[11px] text-slate-500">{secondary}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/* ── Toast ─────────────────────────────────────────────── */
+function Toast({ state }: { state: ToastState }) {
+  if (!state) return null;
+  const tone =
+    state.kind === "success"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : state.kind === "error"
+        ? "border-red-200 bg-red-50 text-red-800"
+        : "border-slate-200 bg-white text-slate-800";
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={`pointer-events-none fixed bottom-6 right-6 z-50 rounded-xl border px-4 py-3 text-sm font-medium shadow-lg ${tone}`}
+    >
+      {state.message}
+    </div>
+  );
+}
+
+/* ── Autopilot pipeline strip (expanded row) ───────────── */
+const PIPELINE_STEPS: {
+  id: AutopilotStepId;
+  label: string;
+  icon: typeof Search;
+}[] = [
   { id: "fetch_source", label: "Fetch", icon: Download },
   { id: "analyze", label: "Analyze", icon: Search },
   { id: "sandbox", label: "Sandbox", icon: FlaskConical },
@@ -752,9 +824,9 @@ function PipelineStrip({ pipeline }: { pipeline: AutopilotStatus }) {
         : -1;
 
   return (
-    <div className="mt-5 rounded-2xl border border-white/8 bg-white/[0.02] p-4">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-[0.6rem] font-semibold uppercase tracking-[0.22em] text-slate-500">
+    <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
           Autopilot Pipeline
         </span>
         {completed && "prUrl" in pipeline ? (
@@ -762,15 +834,15 @@ function PipelineStrip({ pipeline }: { pipeline: AutopilotStatus }) {
             href={pipeline.prUrl}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3 py-1 text-[0.65rem] font-semibold text-emerald-300 hover:border-emerald-300/50 hover:bg-emerald-500/15"
+            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
           >
-            <GitPullRequest className="w-3 h-3" />
+            <GitPullRequest className="h-3 w-3" />
             PR #{pipeline.prNumber}
           </a>
         ) : null}
         {failed && "reason" in pipeline ? (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-red-400/25 bg-red-500/10 px-3 py-1 text-[0.65rem] font-semibold text-red-300">
-            <XCircle className="w-3 h-3" />
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-3 py-1 text-[11px] font-semibold text-red-700">
+            <XCircle className="h-3 w-3" />
             {failureReasonLabel(pipeline.reason)}
           </span>
         ) : null}
@@ -782,30 +854,30 @@ function PipelineStrip({ pipeline }: { pipeline: AutopilotStatus }) {
           const isFailedHere = failed && idx === Math.max(currentIdx, 0);
           const StepIcon = step.icon;
           const dotTone = isFailedHere
-            ? "border-red-400/40 bg-red-500/15 text-red-300"
+            ? "border-red-200 bg-red-50 text-red-700"
             : done
-              ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-300"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
               : active
-                ? "border-cyan-400/40 bg-cyan-500/15 text-cyan-200"
-                : "border-white/10 bg-white/[0.02] text-slate-500";
+                ? "border-slate-300 bg-slate-100 text-slate-900"
+                : "border-slate-200 bg-white text-slate-400";
           const barTone = done
-            ? "bg-emerald-400/40"
+            ? "bg-emerald-300"
             : active
-              ? "bg-cyan-400/40"
-              : "bg-white/10";
+              ? "bg-slate-400"
+              : "bg-slate-200";
           return (
-            <div key={step.id} className="flex items-center gap-2 flex-1">
+            <div key={step.id} className="flex flex-1 items-center gap-2">
               <div
-                className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-[0.65rem] font-semibold ${dotTone}`}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${dotTone}`}
               >
                 {active ? (
-                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <Loader2 className="h-3 w-3 animate-spin" />
                 ) : isFailedHere ? (
-                  <XCircle className="w-3 h-3" />
+                  <XCircle className="h-3 w-3" />
                 ) : done ? (
-                  <CheckCircle2 className="w-3 h-3" />
+                  <CheckCircle2 className="h-3 w-3" />
                 ) : (
-                  <StepIcon className="w-3 h-3" />
+                  <StepIcon className="h-3 w-3" />
                 )}
                 {step.label}
               </div>
@@ -816,40 +888,6 @@ function PipelineStrip({ pipeline }: { pipeline: AutopilotStatus }) {
           );
         })}
       </div>
-    </div>
-  );
-}
-
-/* ── Detail cell sub-component ─────────────────────────── */
-function DetailCell({
-  icon: Icon,
-  label,
-  value,
-  mono,
-  secondary,
-}: {
-  icon: typeof MapPin;
-  label: string;
-  value: string;
-  mono?: boolean;
-  secondary?: string;
-}) {
-  return (
-    <div className="stat-card p-4 backdrop-blur-sm">
-      <dt className="flex items-center gap-1.5 text-[0.6rem] font-semibold uppercase tracking-[0.22em] text-slate-600">
-        <Icon className="w-3 h-3" />
-        {label}
-      </dt>
-      <dd
-        className={`mt-2 text-slate-200 ${
-          mono ? "font-mono text-xs" : "text-sm"
-        }`}
-      >
-        {value}
-      </dd>
-      {secondary && (
-        <dd className="mt-0.5 text-[0.65rem] text-slate-500">{secondary}</dd>
-      )}
     </div>
   );
 }

@@ -19,16 +19,17 @@ export default async function SessionPage({
 
   if (!res || !res.ok) {
     return (
-      <main className="mx-auto max-w-4xl p-8 space-y-6">
+      <main className="mx-auto max-w-4xl px-6 py-10 space-y-6">
         <Link
           href="/"
-          className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-400 hover:text-cyan-300"
+          className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 hover:text-slate-900"
         >
           ← Back to queue
         </Link>
-        <div className="glass-card p-6 text-sm text-slate-400">
-          Incident <span className="font-mono text-slate-300">{id}</span> not
-          found or agent unreachable at {agentBaseUrl}.
+        <div className="glass-card p-6 text-sm text-slate-600">
+          Incident <span className="font-mono text-slate-900">{id}</span> not
+          found or agent unreachable at{" "}
+          <span className="font-mono">{agentBaseUrl}</span>.
         </div>
       </main>
     );
@@ -37,25 +38,25 @@ export default async function SessionPage({
   const record = (await res.json()) as IncidentRecord;
 
   return (
-    <main className="mx-auto max-w-4xl p-8 space-y-6">
+    <main className="mx-auto max-w-4xl px-6 py-10 space-y-6">
       <Link
         href="/"
-        className="inline-flex items-center text-xs font-semibold uppercase tracking-[0.22em] text-cyan-400 hover:text-cyan-300"
+        className="inline-flex items-center text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 hover:text-slate-900"
       >
         ← Back to queue
       </Link>
       <header className="glass-card p-6">
-        <p className="text-[0.6rem] font-bold uppercase tracking-[0.28em] text-slate-500">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-400">
           Incident · {record.incident.incidentId}
         </p>
-        <h1 className="mt-2 text-2xl font-bold text-white leading-snug tracking-tight">
-          <span className="text-slate-400 font-semibold">
+        <h1 className="mt-2 text-2xl font-bold text-slate-900 leading-snug tracking-tight">
+          <span className="text-slate-500 font-semibold">
             {record.incident.exceptionType}
           </span>
-          <span className="text-white/20 mx-2">·</span>
+          <span className="text-slate-300 mx-2">·</span>
           {record.incident.title}
         </h1>
-        <p className="mt-3 text-sm leading-relaxed text-slate-400">
+        <p className="mt-3 text-sm leading-relaxed text-slate-600">
           {record.incident.exceptionMessage}
         </p>
       </header>

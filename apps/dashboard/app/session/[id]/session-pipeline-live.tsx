@@ -148,10 +148,10 @@ export function SessionPipelineLive({
       <FullPipelineView steps={steps} />
 
       <div className="glass-card p-6">
-        <h2 className="text-sm font-bold uppercase tracking-[0.22em] text-slate-400 mb-4">
+        <h2 className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 mb-4">
           Incident Detail
         </h2>
-        <dl className="grid gap-4 text-sm text-slate-400 md:grid-cols-2">
+        <dl className="grid gap-4 text-sm text-slate-600 md:grid-cols-2">
           <SessionCell
             label="Location"
             value={location || "Location unavailable"}
@@ -175,12 +175,12 @@ export function SessionPipelineLive({
 
       {record.incident.codeContext ? (
         <div className="code-block overflow-hidden">
-          <div className="flex items-center gap-2 px-4 py-2.5 border-b border-amber-300/8">
-            <span className="text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-amber-400/50">
+          <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/10">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
               Code Context
             </span>
           </div>
-          <pre className="overflow-x-auto p-4 text-sm leading-6 text-amber-100/80 font-mono">
+          <pre className="overflow-x-auto p-4 text-sm leading-6 text-slate-100 font-mono">
             <code>{record.incident.codeContext}</code>
           </pre>
         </div>
@@ -200,11 +200,11 @@ function SessionCell({
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <dt className="text-[0.6rem] font-bold uppercase tracking-[0.24em] text-slate-500">
+      <dt className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
         {label}
       </dt>
       <dd
-        className={`text-sm text-slate-200 ${mono ? "font-mono" : ""}`}
+        className={`text-sm text-slate-900 ${mono ? "font-mono text-[12px]" : ""}`}
       >
         {value}
       </dd>
