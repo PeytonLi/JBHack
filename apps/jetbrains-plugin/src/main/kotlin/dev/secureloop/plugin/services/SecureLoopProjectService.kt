@@ -4,6 +4,7 @@ import com.intellij.diff.DiffContentFactory
 import com.intellij.diff.DiffManager
 import com.intellij.diff.requests.SimpleDiffRequest
 import com.intellij.ide.BrowserUtil
+import com.intellij.ide.impl.ProjectUtil
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
@@ -24,11 +25,13 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.openapi.wm.WindowManager
 import com.intellij.ui.JBColor
 import dev.secureloop.plugin.model.AgentConnectionState
 import dev.secureloop.plugin.model.AnalysisState
 import dev.secureloop.plugin.model.AnalyzeIncidentRequest
 import dev.secureloop.plugin.model.IncidentPresentation
+import dev.secureloop.plugin.model.NavigateRequest
 import dev.secureloop.plugin.model.NormalizedIncident
 import dev.secureloop.plugin.model.ProjectCompatibilityState
 import dev.secureloop.plugin.model.ResolutionState
@@ -53,7 +56,8 @@ class SecureLoopProjectService(
     private var connectionState: AgentConnectionState = AgentConnectionState.Connecting
 
     init {
-        ApplicationManager.getApplication().messageBus.connect(this).subscribe(
+        val connection = ApplicationManager.getApplication().messageBus.connect(this)
+        connection.subscribe(
             INCIDENT_TOPIC,
             object : IncidentListener {
                 override fun incidentReceived(incident: NormalizedIncident) {
@@ -61,7 +65,7 @@ class SecureLoopProjectService(
                 }
             },
         )
-        ApplicationManager.getApplication().messageBus.connect(this).subscribe(
+        connection.subscribe(
             AGENT_STATUS_TOPIC,
             object : AgentStatusListener {
                 override fun connectionStateChanged(state: AgentConnectionState) {
@@ -70,6 +74,38 @@ class SecureLoopProjectService(
                 }
             },
         )
+        connection.subscribe(
+            NAVIGATE_TOPIC,
+            object : NavigateListener {
+                override fun navigateRequested(request: NavigateRequest) {
+                    handleNavigateRequest(request)
+                }
+            },
+        )
+    }
+
+    private fun handleNavigateRequest(request: NavigateRequest) {
+        val resolution = ProjectFileResolver.resolve(
+            project,
+            request.repoRelativePath,
+            request.originalFramePath,
+            request.lineNumber,
+        )
+        if (resolution !is FileResolution.Resolved) {
+            return
+        }
+        val line = resolution.lineNumber
+        ApplicationManager.getApplication().invokeLater {
+            val descriptor = OpenFileDescriptor(
+                project,
+                resolution.file,
+                (line - 1).coerceAtLeast(0),
+                0,
+            )
+            FileEditorManager.getInstance(project).openTextEditor(descriptor, true)
+            WindowManager.getInstance().getFrame(project)?.toFront()
+            ProjectUtil.focusProjectWindow(project, true)
+        }
     }
 
     fun attachPanel(toolWindowPanel: SecureLoopToolWindowPanel) {

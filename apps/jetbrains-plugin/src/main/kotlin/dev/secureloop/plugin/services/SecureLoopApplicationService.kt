@@ -8,6 +8,7 @@ import dev.secureloop.plugin.model.AgentConnectionState
 import dev.secureloop.plugin.model.AgentHealthResponse
 import dev.secureloop.plugin.model.AnalyzeIncidentRequest
 import dev.secureloop.plugin.model.AnalyzeIncidentResponse
+import dev.secureloop.plugin.model.NavigateRequest
 import dev.secureloop.plugin.model.NormalizedIncident
 import dev.secureloop.plugin.model.PullRequestResult
 import kotlinx.serialization.Serializable
@@ -382,27 +383,49 @@ class SecureLoopApplicationService : Disposable {
 
     private fun readServerSentEvents(reader: BufferedReader) {
         val payload = StringBuilder()
+        var eventName: String? = null
         while (!disposed) {
             val line = reader.readLine() ?: break
             when {
+                line.startsWith("event:") -> {
+                    eventName = line.removePrefix("event:").trim()
+                }
+
                 line.startsWith("data:") -> {
                     payload.append(line.removePrefix("data:").trimStart())
                 }
 
                 line.isBlank() && payload.isNotEmpty() -> {
-                    handlePayload(payload.toString())
+                    handlePayload(payload.toString(), eventName)
                     payload.setLength(0)
+                    eventName = null
                 }
             }
         }
     }
 
-    private fun handlePayload(payload: String) {
-        val incident = json.decodeFromString<NormalizedIncident>(payload)
-        ApplicationManager.getApplication()
-            .messageBus
-            .syncPublisher(INCIDENT_TOPIC)
-            .incidentReceived(incident)
+    private fun handlePayload(payload: String, eventName: String?) {
+        try {
+            when (eventName) {
+                "ide.navigate" -> {
+                    val req = json.decodeFromString<NavigateRequest>(payload)
+                    ApplicationManager.getApplication()
+                        .messageBus
+                        .syncPublisher(NAVIGATE_TOPIC)
+                        .navigateRequested(req)
+                }
+
+                else -> {
+                    val incident = json.decodeFromString<NormalizedIncident>(payload)
+                    ApplicationManager.getApplication()
+                        .messageBus
+                        .syncPublisher(INCIDENT_TOPIC)
+                        .incidentReceived(incident)
+                }
+            }
+        } catch (t: Throwable) {
+            logger.warn("Failed to dispatch SSE payload for event=$eventName", t)
+        }
     }
 
     private fun resolveConnectionState(): AgentConnectionState {

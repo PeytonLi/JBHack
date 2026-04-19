@@ -62,6 +62,45 @@ object ProjectFileResolver {
         return FileResolution.Unresolved("file_not_found")
     }
 
+    fun resolve(
+        project: Project,
+        repoRelativePath: String?,
+        originalFramePath: String?,
+        lineNumber: Int?,
+    ): FileResolution {
+        val repoRelative = normalizePath(repoRelativePath)
+        val original = normalizePath(originalFramePath)
+        val safeLine = (lineNumber ?: 1).coerceAtLeast(1)
+
+        if (project.basePath == null) {
+            return FileResolution.Unresolved("no_open_project")
+        }
+
+        val direct = repoRelative?.let { findDirectMatch(project, it) }
+            ?: original?.let { findAbsolutePath(it) }
+        if (direct != null) {
+            return FileResolution.Resolved(direct, safeLine)
+        }
+
+        val suffixMatches = repoRelative?.let { findSuffixMatches(project, it) }.orEmpty()
+        if (suffixMatches.size == 1) {
+            return FileResolution.Resolved(suffixMatches.first(), safeLine)
+        }
+        if (suffixMatches.size > 1) {
+            return FileResolution.Ambiguous(suffixMatches.map(VirtualFile::getPath).sorted())
+        }
+
+        val basenameMatches = basename(repoRelative ?: original)?.let { findBasenameMatches(project, it) }.orEmpty()
+        if (basenameMatches.size == 1) {
+            return FileResolution.Resolved(basenameMatches.first(), safeLine)
+        }
+        if (basenameMatches.size > 1) {
+            return FileResolution.Ambiguous(basenameMatches.map(VirtualFile::getPath).sorted())
+        }
+
+        return FileResolution.Unresolved("file_not_found")
+    }
+
     fun findByAbsolutePath(project: Project, filePath: String): VirtualFile? {
         val normalized = normalizePath(filePath) ?: return null
         return findAbsolutePath(normalized) ?: findDirectMatch(project, normalized)
