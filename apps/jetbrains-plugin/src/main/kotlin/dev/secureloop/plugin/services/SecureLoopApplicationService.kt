@@ -9,6 +9,8 @@ import dev.secureloop.plugin.model.AgentHealthResponse
 import dev.secureloop.plugin.model.AnalyzeIncidentRequest
 import dev.secureloop.plugin.model.AnalyzeIncidentResponse
 import dev.secureloop.plugin.model.NormalizedIncident
+import dev.secureloop.plugin.model.PullRequestResult
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -233,9 +235,82 @@ class SecureLoopApplicationService : Disposable {
         }
     }
 
+    fun openPullRequest(
+        incidentId: String,
+        updatedFileContent: String,
+        relativePath: String?,
+        onSuccess: (PullRequestResult) -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val token = loadToken()
+            if (token.isNullOrBlank()) {
+                invokeOnUiThread {
+                    onError("SecureLoop is waiting for the IDE token file at ${tokenFilePath()}.")
+                }
+                return@executeOnPooledThread
+            }
+
+            try {
+                val body = OpenPrRequestBody(
+                    updatedFileContent = updatedFileContent,
+                    relativePath = relativePath,
+                )
+                val requestBody = json.encodeToString(OpenPrRequestBody.serializer(), body)
+                val request = HttpRequest.newBuilder(URI.create("${agentBaseUrl()}/ide/events/$incidentId/open-pr"))
+                    .header("Authorization", "Bearer $token")
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .header("Accept", "application/json")
+                    .method(
+                        "POST",
+                        HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8),
+                    )
+                    .timeout(Duration.ofSeconds(30))
+                    .build()
+                val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+                val responseBody = truncatedResponseBody(response.body())
+                when (response.statusCode()) {
+                    200 -> {
+                        val result = json.decodeFromString<PullRequestResult>(response.body())
+                        invokeOnUiThread { onSuccess(result) }
+                    }
+
+                    401 -> {
+                        publishConnectionState(
+                            AgentConnectionState.Unauthorized(
+                                "The IDE token was rejected by the SecureLoop agent.",
+                            ),
+                        )
+                        invokeOnUiThread {
+                            onError("Open PR request failed with HTTP ${response.statusCode()}: $responseBody")
+                        }
+                    }
+
+                    else -> {
+                        logger.warn("Open PR failed with HTTP ${response.statusCode()}: $responseBody")
+                        invokeOnUiThread {
+                            onError("Open PR request failed with HTTP ${response.statusCode()}: $responseBody")
+                        }
+                    }
+                }
+            } catch (exception: Exception) {
+                logger.warn("Failed to open SecureLoop pull request.", exception)
+                invokeOnUiThread {
+                    onError("SecureLoop could not open the pull request via ${agentBaseUrl()}.")
+                }
+            }
+        }
+    }
+
     override fun dispose() {
         disposed = true
     }
+
+    @Serializable
+    private data class OpenPrRequestBody(
+        val updatedFileContent: String,
+        val relativePath: String?,
+    )
 
     private fun connectionLoop() {
         while (!disposed) {

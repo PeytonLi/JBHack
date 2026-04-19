@@ -1,6 +1,10 @@
 package dev.secureloop.plugin.services
 
+import com.intellij.diff.DiffContentFactory
+import com.intellij.diff.DiffManager
+import com.intellij.diff.requests.SimpleDiffRequest
 import com.intellij.ide.BrowserUtil
+import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
@@ -8,9 +12,11 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.markup.EffectType
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.TextAttributes
+import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
@@ -40,6 +46,7 @@ import kotlin.text.Regex
 class SecureLoopProjectService(
     private val project: Project,
 ) : Disposable {
+    private val logger = Logger.getInstance(SecureLoopProjectService::class.java)
     private val incidents = mutableListOf<IncidentPresentation>()
     private val projectCompatibility = detectProjectCompatibility()
     private var panel: SecureLoopToolWindowPanel? = null
@@ -332,9 +339,10 @@ class SecureLoopProjectService(
                 document.setText(updatedText)
                 FileDocumentManager.getInstance().saveDocument(document)
             }
+            val staged = stageFileInGit(resolvedFile)
             updateIncident(presentation.incident.incidentId) {
                 it.copy(
-                    analysisState = AnalysisState.Applied,
+                    analysisState = AnalysisState.Applied(stagedInGit = staged),
                     analysisError = null,
                 )
             }
@@ -344,6 +352,160 @@ class SecureLoopProjectService(
                 "SecureLoop could not apply the approved patch: ${exception.message ?: "unknown error"}.",
             )
         }
+    }
+
+    private fun stageFileInGit(file: VirtualFile): Boolean {
+        if (!PluginManagerCore.isPluginInstalled(PluginId.getId("Git4Idea"))) {
+            return false
+        }
+        return try {
+            val repoManagerClass = Class.forName("git4idea.repo.GitRepositoryManager")
+            val manager = repoManagerClass
+                .getMethod("getInstance", Project::class.java)
+                .invoke(null, project)
+            val repo = repoManagerClass
+                .getMethod("getRepositoryForFile", VirtualFile::class.java)
+                .invoke(manager, file) ?: return false
+            val repoRoot = repo.javaClass.getMethod("getRoot").invoke(repo) as VirtualFile
+            val gitFileUtilsClass = Class.forName("git4idea.util.GitFileUtils")
+            gitFileUtilsClass
+                .getMethod(
+                    "addFiles",
+                    Project::class.java,
+                    VirtualFile::class.java,
+                    MutableCollection::class.java,
+                )
+                .invoke(null, project, repoRoot, mutableListOf(file))
+            true
+        } catch (t: Throwable) {
+            logger.warn("SecureLoop git staging failed", t)
+            false
+        }
+    }
+
+    fun showDiff(presentation: IncidentPresentation) {
+        val analysis = presentation.analysis ?: return
+        val patch = analysis.patch
+        val (before, after) = computeDiffContents(presentation, analysis)
+        ApplicationManager.getApplication().invokeLater {
+            val factory = DiffContentFactory.getInstance()
+            val request = SimpleDiffRequest(
+                "SecureLoop Fix: ${normalizePath(patch.repoRelativePath)}",
+                factory.create(before),
+                factory.create(after),
+                "Before",
+                "After",
+            )
+            DiffManager.getInstance().showDiff(project, request)
+        }
+    }
+
+    private fun computeDiffContents(
+        presentation: IncidentPresentation,
+        analysis: dev.secureloop.plugin.model.AnalyzeIncidentResponse,
+    ): Pair<String, String> {
+        val resolved = presentation.resolution as? ResolutionState.Resolved
+        val virtualFile = resolved?.let { resolvedVirtualFile(it.filePath) }
+        val currentText = virtualFile?.let { currentFileText(it) }
+        val applied = presentation.analysisState is AnalysisState.Applied
+        val oldText = analysis.patch.oldText
+        val newText = analysis.patch.newText
+        return when {
+            currentText == null -> oldText to newText
+            applied -> {
+                val before = if (currentText.contains(newText)) {
+                    currentText.replaceFirst(newText, oldText)
+                } else {
+                    currentText
+                }
+                before to currentText
+            }
+            currentText.contains(oldText) -> {
+                currentText to currentText.replaceFirst(oldText, newText)
+            }
+            else -> oldText to newText
+        }
+    }
+
+    fun openPullRequest(presentation: IncidentPresentation) {
+        val resolved = presentation.resolution as? ResolutionState.Resolved ?: run {
+            failAnalysis(
+                presentation.incident.incidentId,
+                "SecureLoop can only open a PR after applying a fix to a resolved file.",
+            )
+            return
+        }
+        val analysis = presentation.analysis ?: run {
+            failAnalysis(
+                presentation.incident.incidentId,
+                "SecureLoop has no analysis available for this incident yet.",
+            )
+            return
+        }
+        if (presentation.analysisState !is AnalysisState.Applied) {
+            failAnalysis(
+                presentation.incident.incidentId,
+                "Approve the fix before opening a pull request.",
+            )
+            return
+        }
+
+        val virtualFile = resolvedVirtualFile(resolved.filePath) ?: run {
+            failAnalysis(
+                presentation.incident.incidentId,
+                "SecureLoop could not reopen the patched file.",
+            )
+            return
+        }
+        val document = FileDocumentManager.getInstance().getDocument(virtualFile)
+        val updatedContent = document?.text ?: currentFileText(virtualFile) ?: run {
+            failAnalysis(
+                presentation.incident.incidentId,
+                "SecureLoop could not read the patched file contents.",
+            )
+            return
+        }
+
+        val relativePath = normalizePath(analysis.patch.repoRelativePath)
+        service<SecureLoopApplicationService>().openPullRequest(
+            incidentId = presentation.incident.incidentId,
+            updatedFileContent = updatedContent,
+            relativePath = relativePath,
+            onSuccess = { result ->
+                val prUrl = result.prUrl
+                val group = NotificationGroupManager.getInstance()
+                    .getNotificationGroup("SecureLoop Alerts")
+                val notification = if (prUrl != null) {
+                    group.createNotification(
+                        "SecureLoop opened a pull request",
+                        prUrl,
+                        NotificationType.INFORMATION,
+                    )
+                } else {
+                    val artifact = result.localArtifactPath
+                    val message = if (artifact != null) {
+                        "PR creation failed; artifacts written to $artifact."
+                    } else {
+                        result.error ?: "PR creation failed with no details."
+                    }
+                    group.createNotification(
+                        "SecureLoop PR fallback",
+                        message,
+                        NotificationType.WARNING,
+                    )
+                }
+                notification.notify(project)
+                if (prUrl != null) {
+                    BrowserUtil.browse(prUrl)
+                }
+            },
+            onError = { message ->
+                NotificationGroupManager.getInstance()
+                    .getNotificationGroup("SecureLoop Alerts")
+                    .createNotification("SecureLoop PR failed", message, NotificationType.ERROR)
+                    .notify(project)
+            },
+        )
     }
 
     fun runDemoIncident() {

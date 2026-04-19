@@ -36,9 +36,12 @@ class SecureLoopToolWindowPanel(
     private val openFileButton = JButton("Open File")
     private val analyzeButton = JButton("Analyze with Codex")
     private val approveFixButton = JButton("Approve Fix")
+    private val showDiffButton = JButton("Show Diff")
+    private val openPrButton = JButton("Open Pull Request")
     private val rejectButton = JButton("Reject")
     private val markReviewedButton = JButton("Mark Reviewed")
     private val openSentryButton = JButton("Open Sentry")
+    private val badgeLabel = JBLabel()
     private var connectionState: AgentConnectionState = AgentConnectionState.Connecting
     private var projectCompatibility: ProjectCompatibilityState = ProjectCompatibilityState.Unsupported(
         "Open the SecureLoop demo repo to get started.",
@@ -81,6 +84,12 @@ class SecureLoopToolWindowPanel(
         approveFixButton.addActionListener {
             selectedIncident()?.let(projectService::approveFix)
         }
+        showDiffButton.addActionListener {
+            selectedIncident()?.let(projectService::showDiff)
+        }
+        openPrButton.addActionListener {
+            selectedIncident()?.let(projectService::openPullRequest)
+        }
         rejectButton.addActionListener {
             selectedIncident()?.let(projectService::rejectAnalysis)
         }
@@ -105,6 +114,8 @@ class SecureLoopToolWindowPanel(
             add(openFileButton)
             add(analyzeButton)
             add(approveFixButton)
+            add(showDiffButton)
+            add(openPrButton)
             add(rejectButton)
             add(markReviewedButton)
             add(openSentryButton)
@@ -115,10 +126,15 @@ class SecureLoopToolWindowPanel(
             add(buttonBar, BorderLayout.SOUTH)
         }
 
+        val detailPanel = JPanel(BorderLayout()).apply {
+            add(badgeLabel, BorderLayout.NORTH)
+            add(JBScrollPane(detailArea), BorderLayout.CENTER)
+        }
+
         val splitPane = JSplitPane(
             JSplitPane.VERTICAL_SPLIT,
             JBScrollPane(incidentList),
-            JBScrollPane(detailArea),
+            detailPanel,
         ).apply {
             resizeWeight = 0.55
         }
@@ -180,14 +196,19 @@ class SecureLoopToolWindowPanel(
         val presentation = selectedIncident()
         if (presentation == null) {
             detailArea.text = onboardingMessage()
+            badgeLabel.text = ""
             openFileButton.isEnabled = false
             analyzeButton.isEnabled = false
             approveFixButton.isEnabled = false
+            showDiffButton.isEnabled = false
+            openPrButton.isEnabled = false
             rejectButton.isEnabled = false
             markReviewedButton.isEnabled = false
             openSentryButton.isEnabled = false
             return
         }
+
+        badgeLabel.text = renderBadgeHtml(presentation.analysis)
 
         detailArea.text = buildString {
             appendLine(presentation.incident.title)
@@ -229,8 +250,43 @@ class SecureLoopToolWindowPanel(
         approveFixButton.isEnabled = resolved &&
             presentation.analysis != null &&
             presentation.analysisState == AnalysisState.Ready
+        showDiffButton.isEnabled = presentation.analysis != null &&
+            presentation.analysis.diff.isNotBlank()
+        openPrButton.isEnabled = resolved &&
+            presentation.analysis != null &&
+            presentation.analysisState is AnalysisState.Applied
         rejectButton.isEnabled = presentation.analysis != null && presentation.analysisState != AnalysisState.Applying
         markReviewedButton.isEnabled = !presentation.reviewed
+    }
+
+    private fun renderBadgeHtml(analysis: AnalyzeIncidentResponse?): String {
+        if (analysis == null) {
+            return ""
+        }
+        val severityColor = when (analysis.severity.trim().lowercase()) {
+            "critical" -> "#b00020"
+            "high" -> "#d84315"
+            "medium" -> "#e8900c"
+            "low" -> "#2e7d32"
+            else -> "#546e7a"
+        }
+        val severityBadge = "<span style='background:$severityColor;color:#ffffff;" +
+            "padding:2px 8px;border-radius:8px;font-weight:600;'>" +
+            escapeHtml(analysis.severity.uppercase()) + "</span>"
+        val cwePill = "<span style='background:#263238;color:#ffffff;" +
+            "padding:2px 8px;border-radius:8px;margin-left:6px;'>" +
+            escapeHtml(analysis.cwe) + "</span>"
+        val category = "<span style='margin-left:8px;color:#455a64;'>" +
+            escapeHtml(analysis.category) + "</span>"
+        return "<html><body style='margin:4px;'>" + severityBadge + cwePill + category +
+            "</body></html>"
+    }
+
+    private fun escapeHtml(value: String): String {
+        return value
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
     }
 
     private fun selectedIncident(): IncidentPresentation? = incidentList.selectedValue
@@ -337,7 +393,11 @@ class SecureLoopToolWindowPanel(
             AnalysisState.Loading -> "Analyzing..."
             AnalysisState.Ready -> "Analysis ready"
             AnalysisState.Applying -> "Applying approved patch..."
-            AnalysisState.Applied -> "Patch applied locally"
+            is AnalysisState.Applied -> if (state.stagedInGit) {
+                "Saved + staged in Git"
+            } else {
+                "Saved (Git not detected)"
+            }
             AnalysisState.Failed -> "Failed"
         }
     }
@@ -361,6 +421,29 @@ class SecureLoopToolWindowPanel(
             appendLine("Fix plan:")
             analysis.fixPlan.forEachIndexed { index, step ->
                 appendLine("${index + 1}. $step")
+            }
+            if (analysis.reasoningSteps.isNotEmpty()) {
+                appendLine()
+                appendLine("Reasoning steps:")
+                analysis.reasoningSteps.forEachIndexed { index, step ->
+                    appendLine("${index + 1}. $step")
+                }
+            }
+            analysis.depCheck?.let { dep ->
+                appendLine()
+                appendLine("Dependency scan (${dep.scanner}):")
+                if (dep.vulnerabilities.isEmpty()) {
+                    appendLine("- No vulnerable dependencies detected.")
+                } else {
+                    dep.vulnerabilities.forEach { vuln ->
+                        val fixed = vuln.fixedVersion?.let { " -> $it" } ?: ""
+                        appendLine("- [${vuln.severity}] ${vuln.id} ${vuln.`package`}==${vuln.version}$fixed")
+                        appendLine("    ${vuln.summary}")
+                    }
+                }
+                dep.advisoryUrl?.takeIf { it.isNotBlank() }?.let {
+                    appendLine("Advisory: $it")
+                }
             }
             appendLine()
             appendLine("Diff:")
