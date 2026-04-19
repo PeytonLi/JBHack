@@ -249,7 +249,7 @@ Built at **JetBrains Codex Hackathon 2026** in San Francisco.
 |--|--|
 | **Abhiram Sribhashyam** | Agent backend | Codex integration | module architecture |
 | **Rahul Marri** | Dashboard & Frontend | Vulnerable code checker | security-policy.md | OWASP & CWE integration |
-| **Peyton Li** | JetBrains plugin | Sentry ingestion | SSE streaming |
+| **Peyton Li** | JetBrains plugin | Sentry ingestion | SSE streaming | Agent Pipelines |
 
 ---
 
