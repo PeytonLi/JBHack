@@ -2,6 +2,12 @@
 
 **Read `docs/AGENT_CONTEXT.md` before doing anything in this repo.**
 
+## gstack
+
+Use gstack skills when the request matches one of those workflows. Prefer `/browse` for web browsing instead of ad hoc browser tooling.
+
+Available gstack skills include `/office-hours`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/design-consultation`, `/design-shotgun`, `/design-html`, `/review`, `/ship`, `/land-and-deploy`, `/canary`, `/benchmark`, `/browse`, `/open-gstack-browser`, `/qa`, `/qa-only`, `/design-review`, `/setup-browser-cookies`, `/setup-deploy`, `/retro`, `/investigate`, `/document-release`, `/codex`, `/cso`, `/autoplan`, `/pair-agent`, `/careful`, `/freeze`, `/guard`, `/unfreeze`, `/gstack-upgrade`, and `/learn`.
+
 ## What this is
 
 Auto-Scribe is a self-healing AI SRE agent: Sentry webhook in, GitHub PR with COE report out. Built for JBHack hackathon, 48-hour solo build.
