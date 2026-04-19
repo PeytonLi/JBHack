@@ -73,8 +73,8 @@ export default async function Home() {
             <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
               This dashboard reflects the real companion service contract: raw
               incidents in, human review in the IDE, reviewed history retained
-              in the local queue. It does not pretend the AI analysis pipeline
-              exists yet.
+              in the local queue, with Codex analysis and approved fixes
+              handled inside the JetBrains plugin.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <a
