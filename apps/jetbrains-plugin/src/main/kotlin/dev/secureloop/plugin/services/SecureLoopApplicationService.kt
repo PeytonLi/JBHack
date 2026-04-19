@@ -6,6 +6,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import dev.secureloop.plugin.model.AgentConnectionState
 import dev.secureloop.plugin.model.AgentHealthResponse
+import dev.secureloop.plugin.model.AnalysisResponse
 import dev.secureloop.plugin.model.NormalizedIncident
 import kotlinx.serialization.json.Json
 import java.io.BufferedReader
@@ -161,6 +162,51 @@ class SecureLoopApplicationService : Disposable {
                 }
             } catch (exception: Exception) {
                 logger.warn("Failed to mark incident $incidentId as reviewed", exception)
+            }
+        }
+    }
+
+    fun analyzeIncident(
+        incidentId: String,
+        sourceContext: String,
+        policyText: String?,
+        callback: (AnalysisResponse?) -> Unit,
+    ) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val token = loadToken()
+            if (token.isNullOrBlank()) {
+                callback(null)
+                return@executeOnPooledThread
+            }
+
+            try {
+                val bodyJson = buildString {
+                    append('{"sourceContext":')
+                    append(Json.encodeToString(kotlinx.serialization.builtins.serializer<String>(), sourceContext))
+                    if (policyText != null) {
+                        append(',"policyText":')
+                        append(Json.encodeToString(kotlinx.serialization.builtins.serializer<String>(), policyText))
+                    }
+                    append('}')
+                }
+
+                val request = HttpRequest.newBuilder(URI.create("${agentBaseUrl()}/ide/events/$incidentId/analyze"))
+                    .header("Authorization", "Bearer $token")
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
+                    .timeout(Duration.ofSeconds(60))
+                    .build()
+                val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+                if (response.statusCode() == 200) {
+                    val analysis = json.decodeFromString<AnalysisResponse>(response.body())
+                    callback(analysis)
+                } else {
+                    logger.warn("Analyze request failed with HTTP ${response.statusCode()}.")
+                    callback(null)
+                }
+            } catch (exception: Exception) {
+                logger.warn("Failed to analyze incident $incidentId", exception)
+                callback(null)
             }
         }
     }

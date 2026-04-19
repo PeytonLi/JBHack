@@ -33,6 +33,8 @@ class SecureLoopToolWindowPanel(
     private val openFileButton = JButton("Open File")
     private val markReviewedButton = JButton("Mark Reviewed")
     private val openSentryButton = JButton("Open Sentry")
+    private val analyzeButton = JButton("Analyze")
+    private var analyzing = false
     private var connectionState: AgentConnectionState = AgentConnectionState.Connecting
     private var projectCompatibility: ProjectCompatibilityState = ProjectCompatibilityState.Unsupported(
         "Open the SecureLoop demo repo to get started.",
@@ -73,6 +75,9 @@ class SecureLoopToolWindowPanel(
         openSentryButton.addActionListener {
             selectedIncident()?.let(projectService::openIncidentInBrowser)
         }
+        analyzeButton.addActionListener {
+            selectedIncident()?.let(projectService::analyzeSelectedIncident)
+        }
 
         val statusPanel = JPanel(BorderLayout()).apply {
             add(statusLabel, BorderLayout.NORTH)
@@ -86,6 +91,7 @@ class SecureLoopToolWindowPanel(
             add(openFileButton)
             add(markReviewedButton)
             add(openSentryButton)
+            add(analyzeButton)
         }
 
         val topPanel = JPanel(BorderLayout()).apply {
@@ -143,6 +149,11 @@ class SecureLoopToolWindowPanel(
         }
     }
 
+    fun setAnalyzing(value: Boolean) {
+        analyzing = value
+        renderSelection()
+    }
+
     private fun renderSelection() {
         renderEnvironment()
         val presentation = selectedIncident()
@@ -172,11 +183,48 @@ class SecureLoopToolWindowPanel(
                 appendLine("Code context:")
                 appendLine(it)
             }
+
+            if (analyzing) {
+                appendLine()
+                appendLine("═══════════════════════════════════════")
+                appendLine("⏳ Analyzing with Codex...")
+                appendLine("═══════════════════════════════════════")
+            }
+
+            presentation.analysis?.let { analysis ->
+                appendLine()
+                appendLine("═══════════════════════════════════════")
+                appendLine("SECURITY ANALYSIS")
+                appendLine("═══════════════════════════════════════")
+                appendLine("Severity: ${analysis.severity}")
+                analysis.cwe?.let { appendLine("CWE: $it") }
+                analysis.owasp?.let { appendLine("OWASP: $it") }
+                analysis.category?.let { appendLine("Category: $it") }
+                appendLine()
+                appendLine("Explanation:")
+                appendLine(analysis.explanation)
+                if (analysis.violatedPolicy.isNotEmpty()) {
+                    appendLine()
+                    appendLine("Violated Policies:")
+                    analysis.violatedPolicy.forEach { appendLine("  • $it") }
+                }
+                if (analysis.fixPlan.isNotEmpty()) {
+                    appendLine()
+                    appendLine("Fix Plan:")
+                    analysis.fixPlan.forEach { appendLine("  • $it") }
+                }
+                appendLine()
+                appendLine("Diff:")
+                appendLine(analysis.diff)
+            }
         }
 
         openSentryButton.isEnabled = true
         openFileButton.isEnabled = presentation.resolution is ResolutionState.Resolved
         markReviewedButton.isEnabled = !presentation.reviewed
+        analyzeButton.isEnabled = presentation.resolution is ResolutionState.Resolved
+            && presentation.analysis == null
+            && !analyzing
     }
 
     private fun selectedIncident(): IncidentPresentation? = incidentList.selectedValue

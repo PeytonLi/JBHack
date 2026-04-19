@@ -4,6 +4,7 @@ data class IncidentPresentation(
     val incident: NormalizedIncident,
     val resolution: ResolutionState = ResolutionState.Pending,
     val reviewed: Boolean = false,
+    val analysis: AnalysisResponse? = null,
 )
 
 sealed interface ResolutionState {

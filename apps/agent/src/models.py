@@ -73,35 +73,6 @@ class IncidentFeedResponse(CamelModel):
     incidents: list[IncidentRecord]
 
 
-class AnalyzeIncidentRequest(CamelModel):
-    incident_id: str
-    repo_relative_path: str
-    line_number: int
-    exception_type: str
-    exception_message: str
-    title: str
-    source_context: str
-    policy_text: str
-
-
-class AnalyzePatch(CamelModel):
-    repo_relative_path: str
-    old_text: str
-    new_text: str
-
-
-class AnalyzeIncidentResponse(CamelModel):
-    severity: Literal["Critical", "High", "Medium", "Low"]
-    category: str
-    cwe: str
-    title: str
-    explanation: str
-    violated_policy: list[str]
-    fix_plan: list[str]
-    diff: str
-    patch: AnalyzePatch
-
-
 class DebugIncidentRequest(CamelModel):
     title: str = "Local SecureLoop test incident"
     exception_type: str = "KeyError"
@@ -134,6 +105,41 @@ class DebugIncidentRequest(CamelModel):
             code_context=self.code_context,
             event_web_url=self.event_web_url,
         )
+
+
+class AnalysisRequest(CamelModel):
+    incident_id: str
+    repo_relative_path: str
+    line_number: int | None = None
+    exception_type: str
+    exception_message: str
+    title: str
+    source_context: str
+    policy_text: str | None = None
+
+
+class AnalyzeIncidentBody(CamelModel):
+    source_context: str
+    policy_text: str | None = None
+
+
+class AnalysisPatch(CamelModel):
+    repo_relative_path: str
+    old_text: str
+    new_text: str
+
+
+class AnalysisResponse(CamelModel):
+    severity: Literal["Critical", "High", "Medium", "Low"]
+    category: str | None = None
+    owasp: str | None = None
+    cwe: str | None = None
+    title: str
+    explanation: str
+    violated_policy: list[str] = Field(default_factory=list)
+    fix_plan: list[str] = Field(default_factory=list)
+    diff: str
+    patch: AnalysisPatch
 
 
 def normalize_sentry_event(

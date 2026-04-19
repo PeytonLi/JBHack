@@ -93,7 +93,7 @@ async def test_debug_endpoint_creates_live_incident(app) -> None:
             "/debug/incidents",
             json={
                 "repoRelativePath": "apps/target/src/main.py",
-                "lineNumber": 45,
+                "lineNumber": 37,
                 "exceptionType": "RuntimeError",
                 "exceptionMessage": "debug smoke test",
             },
@@ -104,6 +104,45 @@ async def test_debug_endpoint_creates_live_incident(app) -> None:
         assert payload["repoRelativePath"] == "apps/target/src/main.py"
         incidents = await app.state.store.list_unreviewed()
         assert len(incidents) == 1
+
+
+@pytest.mark.asyncio
+async def test_analyze_endpoint_returns_structured_diagnosis(app) -> None:
+    await app.state.store.initialize()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        create_response = await client.post(
+            "/debug/incidents",
+            json={
+                "repoRelativePath": "apps/target/src/main.py",
+                "lineNumber": 45,
+                "exceptionType": "KeyError",
+                "exceptionMessage": "999",
+                "title": "KeyError: 999",
+                "codeContext": "warehouse_name = WAREHOUSES[warehouse_id]",
+            },
+            headers={"authorization": "Bearer ide-token"},
+        )
+        assert create_response.status_code == 201
+        incident_id = create_response.json()["incidentId"]
+
+        analyze_response = await client.post(
+            f"/ide/events/{incident_id}/analyze",
+            json={
+                "sourceContext": 'warehouse_id = int(order["warehouse_id"])\n    warehouse_name = WAREHOUSES[warehouse_id]',
+                "policyText": "BANNED-DB-01: String concatenation to build SQL queries.",
+            },
+            headers={"authorization": "Bearer ide-token"},
+        )
+        assert analyze_response.status_code == 200
+        result = analyze_response.json()
+        assert result["severity"] in ("Critical", "High", "Medium", "Low")
+        assert "title" in result
+        assert "explanation" in result
+        assert "diff" in result
+        assert "patch" in result
+        assert "repoRelativePath" in result["patch"]
 
 
 @pytest.mark.asyncio
@@ -126,7 +165,7 @@ def test_normalize_sentry_event_prefers_in_app_frame() -> None:
         sample_event_payload(),
     )
     assert incident.exception_type == "KeyError"
-    assert incident.line_number == 45
+    assert incident.line_number == 37
     assert incident.repo_relative_path == "apps/target/src/main.py"
 
 
@@ -177,7 +216,7 @@ def sample_event_payload() -> dict:
                                     {
                                         "filename": "/workspace/JBHack/apps/target/src/main.py",
                                         "function": "checkout",
-                                        "lineno": 45,
+                                        "lineno": 37,
                                         "context_line": "warehouse_name = WAREHOUSES[warehouse_id]",
                                         "in_app": True,
                                     },

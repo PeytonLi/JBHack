@@ -57,6 +57,17 @@ class IncidentStore:
             except sqlite3.IntegrityError:
                 return False
 
+    async def get_incident(self, incident_id: str) -> NormalizedIncident | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT payload_json FROM incidents WHERE incident_id = ?",
+                (incident_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return NormalizedIncident.model_validate_json(row[0])
+
     async def list_unreviewed(self) -> list[NormalizedIncident]:
         async with aiosqlite.connect(self._db_path) as db:
             cursor = await db.execute(

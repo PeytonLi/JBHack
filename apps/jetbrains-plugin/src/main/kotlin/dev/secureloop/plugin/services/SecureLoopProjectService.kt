@@ -10,6 +10,7 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.markup.EffectType
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.TextAttributes
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
@@ -91,6 +92,74 @@ class SecureLoopProjectService(
 
         service<SecureLoopApplicationService>().markIncidentReviewed(presentation.incident.incidentId)
         upsertIncident(presentation.copy(reviewed = true))
+    }
+
+    fun analyzeSelectedIncident(presentation: IncidentPresentation) {
+        if (presentation.analysis != null) {
+            return
+        }
+
+        val resolution = presentation.resolution
+        if (resolution !is ResolutionState.Resolved) {
+            return
+        }
+
+        val sourceContext = readSourceContext(resolution.filePath, resolution.lineNumber)
+        if (sourceContext.isBlank()) {
+            return
+        }
+
+        val policyText = readSecurityPolicy()
+
+        upsertIncident(presentation.copy(
+            analysis = null,
+        ))
+        ApplicationManager.getApplication().invokeLater {
+            panel?.setAnalyzing(true)
+        }
+
+        service<SecureLoopApplicationService>().analyzeIncident(
+            incidentId = presentation.incident.incidentId,
+            sourceContext = sourceContext,
+            policyText = policyText,
+        ) { response ->
+            val updated = presentation.copy(analysis = response)
+            upsertIncident(updated)
+            ApplicationManager.getApplication().invokeLater {
+                panel?.setAnalyzing(false)
+            }
+        }
+    }
+
+    private fun readSourceContext(filePath: String, lineNumber: Int): String {
+        val file = ProjectFileResolver.findByAbsolutePath(project, filePath) ?: return ""
+        val document = ApplicationManager.getApplication().runReadAction<com.intellij.openapi.editor.Document?> {
+            FileDocumentManager.getInstance().getDocument(file)
+        } ?: return ""
+
+        val totalLines = document.lineCount
+        val targetLine = (lineNumber - 1).coerceIn(0, totalLines - 1)
+        val startLine = (targetLine - 10).coerceAtLeast(0)
+        val endLine = (targetLine + 10).coerceAtMost(totalLines - 1)
+
+        return ApplicationManager.getApplication().runReadAction<String> {
+            val startOffset = document.getLineStartOffset(startLine)
+            val endOffset = document.getLineEndOffset(endLine)
+            document.getText(com.intellij.openapi.util.TextRange(startOffset, endOffset))
+        }
+    }
+
+    private fun readSecurityPolicy(): String? {
+        val basePath = project.basePath ?: return null
+        val policyPath = Path.of(basePath).resolve("security-policy.md")
+        if (!Files.exists(policyPath)) {
+            return null
+        }
+        return try {
+            Files.readString(policyPath)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     fun runDemoIncident() {
