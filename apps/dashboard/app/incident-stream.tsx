@@ -127,6 +127,82 @@ const rowVariant: Variants = {
 
 type ToastKind = "success" | "info" | "error";
 type ToastState = { message: string; kind: ToastKind } | null;
+type AgentPipelinePayload = {
+  incidentId?: string;
+  step?: string;
+  reason?: string;
+  detail?: string;
+  error?: string;
+  prUrl?: string | null;
+};
+
+const PRE_PR_FAILURE_REASONS = new Set([
+  "incident_not_found",
+  "missing_source_metadata",
+  "source_file_not_found",
+  "patch_mismatch",
+  "sandbox_test_generation_failed",
+  "sandbox_did_not_reproduce",
+  "sandbox_fix_failed",
+  "sandbox_timeout",
+  "sandbox_runner_error",
+  "internal_error",
+]);
+
+function translateAgentEvent(
+  eventName: "pipeline.step" | "pipeline.completed" | "pipeline.failed",
+  payload: AgentPipelinePayload,
+): PipelineStepEvent[] {
+  const incidentId = payload.incidentId;
+  if (!incidentId) return [];
+
+  if (eventName === "pipeline.step") {
+    switch (payload.step) {
+      case "fetch_source":
+      case "analyze":
+        return [{ incidentId, step: "analyzing", status: "running" }];
+      case "sandbox":
+        return [
+          { incidentId, step: "analyzing", status: "completed" },
+          { incidentId, step: "sandbox", status: "running" },
+        ];
+      case "open_pr":
+        return [
+          { incidentId, step: "analyzing", status: "completed" },
+          { incidentId, step: "sandbox", status: "completed" },
+          { incidentId, step: "pr_opening", status: "running" },
+        ];
+      default:
+        return [];
+    }
+  }
+
+  if (eventName === "pipeline.completed") {
+    return [
+      {
+        incidentId,
+        step: "pr_opening",
+        status: "completed",
+        prUrl: payload.prUrl ?? null,
+      },
+    ];
+  }
+
+  const reason = payload.reason ?? payload.error ?? "unknown";
+  const failedStep = reason.startsWith("sandbox_")
+    ? "sandbox"
+    : PRE_PR_FAILURE_REASONS.has(reason)
+      ? "analyzing"
+      : "pr_opening";
+  return [
+    {
+      incidentId,
+      step: failedStep,
+      status: "failed",
+      error: payload.detail ?? payload.error ?? reason,
+    },
+  ];
+}
 
 /* ── Main stream ───────────────────────────────────────── */
 export function IncidentStream({
@@ -260,19 +336,28 @@ export function IncidentStream({
 
     const handlePipelineStep = (evt: MessageEvent) => {
       try {
-        const data = JSON.parse(evt.data) as AutopilotStepEvent;
+        const data = JSON.parse(evt.data) as AutopilotStepEvent &
+          AgentPipelinePayload;
         if (!isAutopilotStepId(data.step)) return;
         setPipelines((prev) => ({
           ...prev,
           [data.incidentId]: { phase: "running", step: data.step },
         }));
+        const translated = translateAgentEvent("pipeline.step", data);
+        if (translated.length > 0) {
+          setPipelineEvents((prev) => ({
+            ...prev,
+            [data.incidentId]: [...(prev[data.incidentId] ?? []), ...translated],
+          }));
+        }
       } catch {
         // ignore
       }
     };
     const handlePipelineCompleted = (evt: MessageEvent) => {
       try {
-        const data = JSON.parse(evt.data) as AutopilotCompletedEvent;
+        const data = JSON.parse(evt.data) as AutopilotCompletedEvent &
+          AgentPipelinePayload;
         setPipelines((prev) => ({
           ...prev,
           [data.incidentId]: {
@@ -282,13 +367,21 @@ export function IncidentStream({
             branch: data.branch,
           },
         }));
+        const translated = translateAgentEvent("pipeline.completed", data);
+        if (translated.length > 0) {
+          setPipelineEvents((prev) => ({
+            ...prev,
+            [data.incidentId]: [...(prev[data.incidentId] ?? []), ...translated],
+          }));
+        }
       } catch {
         // ignore
       }
     };
     const handlePipelineFailed = (evt: MessageEvent) => {
       try {
-        const data = JSON.parse(evt.data) as AutopilotFailedEvent;
+        const data = JSON.parse(evt.data) as AutopilotFailedEvent &
+          AgentPipelinePayload;
         setPipelines((prev) => ({
           ...prev,
           [data.incidentId]: {
@@ -297,6 +390,13 @@ export function IncidentStream({
             path: data.path,
           },
         }));
+        const translated = translateAgentEvent("pipeline.failed", data);
+        if (translated.length > 0) {
+          setPipelineEvents((prev) => ({
+            ...prev,
+            [data.incidentId]: [...(prev[data.incidentId] ?? []), ...translated],
+          }));
+        }
       } catch {
         // ignore
       }
@@ -341,7 +441,7 @@ export function IncidentStream({
         variants={listStagger}
         initial="hidden"
         animate="visible"
-        className="grid gap-6 xl:grid-cols-2"
+        className="grid gap-6 xl:grid-cols-[1.12fr_0.88fr]"
       >
         {/* ── Open incidents panel ─────────────────────── */}
         <LogPanel
@@ -354,11 +454,8 @@ export function IncidentStream({
           connected={connected}
           emptyMessage={
             <>
-              No open incidents in the queue. Trigger{" "}
-              <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
-                Run Demo
-              </code>{" "}
-              in the plugin to generate one.
+              No active incidents. Trigger a Sentry alert and SecureLoop will
+              start the autopilot remediation loop.
             </>
           }
         >
@@ -390,11 +487,8 @@ export function IncidentStream({
           Icon={Eye}
           emptyMessage={
             <>
-              Reviewed incidents appear here after a developer clicks{" "}
-              <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
-                Mark Reviewed
-              </code>{" "}
-              in the IDE.
+              Reviewed incidents appear here after the developer approves or
+              rejects the generated fix in JetBrains.
             </>
           }
         >
@@ -456,22 +550,22 @@ function LogPanel({
       <div className="log-panel-header">
         <div className="flex items-center gap-3">
           <span
-            className={`flex h-8 w-8 items-center justify-center rounded-lg ${iconClass}`}
+            className={`flex h-10 w-10 items-center justify-center rounded-lg ${iconClass}`}
           >
-            <Icon className="h-4 w-4" strokeWidth={2.25} />
+            <Icon className="h-5 w-5" strokeWidth={2.25} />
           </span>
           <div>
-            <h2 className="text-[15px] font-bold tracking-tight text-slate-900">
+            <h2 className="text-[19px] font-black text-slate-950">
               {title}
             </h2>
-            <p className="text-[11px] text-slate-500">
+            <p className="mt-0.5 text-[12px] font-medium text-slate-500">
               {count} {countLabel} · log-style feed
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           {live ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold uppercase text-slate-500">
               <span
                 className={`h-1.5 w-1.5 rounded-full ${
                   connected ? "bg-emerald-500 pulse-live" : "bg-amber-400"
@@ -481,7 +575,7 @@ function LogPanel({
             </span>
           ) : null}
           <span
-            className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-bold tabular-nums ${countClass}`}
+            className={`inline-flex items-center rounded-lg border px-3 py-1 text-[12px] font-black tabular-nums ${countClass}`}
           >
             {count}
           </span>
@@ -489,8 +583,8 @@ function LogPanel({
       </div>
 
       {count === 0 ? (
-        <div className="flex items-center justify-center px-6 py-12">
-          <p className="max-w-sm text-center text-[13px] leading-6 text-slate-500">
+        <div className="flex min-h-[190px] items-center justify-center px-8 py-14">
+          <p className="max-w-md text-center text-[15px] font-medium leading-7 text-slate-500">
             {emptyMessage}
           </p>
         </div>
@@ -580,17 +674,17 @@ function LogRow({
                 {record.incident.environment}
               </span>
             ) : null}
-            <span className="font-mono text-[12px] font-semibold text-slate-900">
+            <span className="font-mono text-[13px] font-black text-slate-950">
               {record.incident.exceptionType}
             </span>
             <span className="text-slate-300">·</span>
-            <span className="text-[13px] font-medium text-slate-700 truncate">
+            <span className="truncate text-[15px] font-bold text-slate-800">
               {record.incident.title}
             </span>
           </div>
 
           {/* Line 2 — location + function + time */}
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-slate-500">
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-slate-500">
             <span className="inline-flex items-center gap-1.5 font-mono">
               <MapPin className="h-3 w-3 text-slate-400" />
               {location || "location unavailable"}
@@ -625,25 +719,23 @@ function LogRow({
 
       {/* Right-rail quick actions (always visible) */}
       <div className="mt-3 flex flex-wrap items-center gap-2 pl-5">
-        {!autopilotEnabled ? (
-          <button
-            type="button"
-            disabled={!canOpenInIde || !onOpenInIde}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (canOpenInIde) onOpenInIde?.(record.incident.incidentId);
-            }}
-            className="btn"
-            title={
-              canOpenInIde
-                ? "Open this file in your running JetBrains IDE"
-                : "No repo-relative path available"
-            }
-          >
-            <FileCode2 className="h-3.5 w-3.5" />
-            Open in IDE
-          </button>
-        ) : null}
+        <button
+          type="button"
+          disabled={!canOpenInIde || !onOpenInIde}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (canOpenInIde) onOpenInIde?.(record.incident.incidentId);
+          }}
+          className="btn"
+          title={
+            canOpenInIde
+              ? "Open this file in your running JetBrains IDE"
+              : "No repo-relative path available"
+          }
+        >
+          <FileCode2 className="h-3.5 w-3.5" />
+          Open in IDE
+        </button>
         <a
           className="btn"
           href={record.incident.eventWebUrl}

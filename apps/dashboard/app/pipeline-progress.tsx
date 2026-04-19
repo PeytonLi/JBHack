@@ -17,9 +17,10 @@ import type {
 } from "./types";
 
 const STEP_LABELS: Record<PipelineStepId, string> = {
-  ingested: "Ingested",
+  ingested: "Alert",
   analyzing: "Analyzing",
-  analyzed: "Analyzed",
+  analyzed: "Patch",
+  sandbox: "Sandbox",
   pr_opening: "Opening PR",
   pr_ready: "PR Ready",
 };
@@ -28,6 +29,7 @@ const STEP_ORDER: PipelineStepId[] = [
   "ingested",
   "analyzing",
   "analyzed",
+  "sandbox",
   "pr_opening",
   "pr_ready",
 ];
@@ -61,6 +63,7 @@ export function derivePipelineSteps(
     ingested: makeStep("ingested", "completed", record.createdAt),
     analyzing: makeStep("analyzing", "pending", null),
     analyzed: makeStep("analyzed", "pending", null),
+    sandbox: makeStep("sandbox", "pending", null),
     pr_opening: makeStep("pr_opening", "pending", null),
     pr_ready: makeStep("pr_ready", "pending", null),
   };
@@ -77,7 +80,20 @@ export function derivePipelineSteps(
       } else if (ev.status === "failed") {
         steps.analyzing = makeStep("analyzing", "failed", stamp, ev.error ?? null);
       }
+    } else if (ev.step === "sandbox") {
+      steps.analyzing = makeStep("analyzing", "completed", stamp);
+      steps.analyzed = makeStep("analyzed", "completed", stamp);
+      if (ev.status === "running") {
+        steps.sandbox = makeStep("sandbox", "running", stamp);
+      } else if (ev.status === "completed") {
+        steps.sandbox = makeStep("sandbox", "completed", stamp);
+      } else if (ev.status === "failed") {
+        steps.sandbox = makeStep("sandbox", "failed", stamp, ev.error ?? null);
+      }
     } else if (ev.step === "pr_opening") {
+      steps.analyzing = makeStep("analyzing", "completed", stamp);
+      steps.analyzed = makeStep("analyzed", "completed", stamp);
+      steps.sandbox = makeStep("sandbox", "completed", stamp);
       if (ev.status === "running") {
         steps.pr_opening = makeStep("pr_opening", "running", stamp);
       } else if (ev.status === "completed") {

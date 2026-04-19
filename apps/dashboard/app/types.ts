@@ -113,6 +113,7 @@ export type PipelineStepId =
   | "ingested"
   | "analyzing"
   | "analyzed"
+  | "sandbox"
   | "pr_opening"
   | "pr_ready";
 export type PipelineStepStatus = "pending" | "running" | "completed" | "failed";

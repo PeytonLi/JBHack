@@ -5,7 +5,9 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  Moon,
   RefreshCw,
+  Sun,
   Terminal,
   Trash2,
   Zap,
@@ -43,6 +45,8 @@ type DashboardData = {
   error: string | null;
 };
 
+type ThemeMode = "dark" | "light";
+
 export default function Home() {
   const [data, setData] = useState<DashboardData>({
     health: null,
@@ -54,6 +58,7 @@ export default function Home() {
   const [clearing, setClearing] = useState<"open" | "reviewed" | null>(null);
   const [liveRecords, setLiveRecords] = useState<IncidentRecord[]>([]);
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+  const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
 
   const fetchData = useCallback(async () => {
     try {
@@ -105,6 +110,29 @@ export default function Home() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem("secureloop-theme");
+    if (stored === "dark" || stored === "light") {
+      setThemeMode(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.secureloopTheme = themeMode;
+    document.body.dataset.secureloopTheme = themeMode;
+    document.body.style.backgroundColor =
+      themeMode === "dark" ? "#080a09" : "#fbfcfe";
+    document.body.style.color = themeMode === "dark" ? "#f7f7f4" : "#0f172a";
+  }, [themeMode]);
+
+  const toggleTheme = useCallback(() => {
+    setThemeMode((current) => {
+      const next = current === "dark" ? "light" : "dark";
+      window.localStorage.setItem("secureloop-theme", next);
+      return next;
+    });
+  }, []);
 
   const clearIncidents = useCallback(
     async (status: "open" | "reviewed") => {
@@ -167,28 +195,51 @@ export default function Home() {
   }, [lastSyncAt]);
 
   const agentOk = health?.status === "ok";
+  const isDarkTheme = themeMode === "dark";
 
   return (
-    <main className="min-h-screen bg-white text-slate-900">
+    <main
+      data-theme={themeMode}
+      className={`${isDarkTheme ? "secureloop-stage" : "bg-[#fbfcfe]"} min-h-screen text-slate-900`}
+      style={{
+        background: isDarkTheme ? "#080a09" : "#fbfcfe",
+        color: isDarkTheme ? "#f7f7f4" : "#0f172a",
+      }}
+    >
       {/* ── Top navigation ─────────────────────────────── */}
       <nav className="nav-shell sticky top-0 z-40">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3 lg:px-10">
+        <div className="mx-auto flex max-w-[1540px] items-center justify-between px-6 py-4 lg:px-10">
           <div className="flex items-center gap-3">
-            <Image
-              src="/secureloop-logo.png"
-              alt="SecureLoop"
-              width={1024}
-              height={559}
-              priority
-              className="h-9 w-auto"
-            />
-            <span className="hidden md:inline text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-400 border-l border-slate-200 pl-3 ml-1">
-              Dashboard
+            <div className="logo-tile">
+              <Image
+                src="/secureloop-logo.png"
+                alt="SecureLoop"
+                width={1024}
+                height={559}
+                priority
+                className="h-8 w-auto"
+              />
+            </div>
+            <span className="hidden border-l border-slate-200 pl-4 text-[12px] font-semibold uppercase text-slate-500 md:inline">
+              Autopilot
             </span>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="btn"
+              aria-label={`Switch to ${isDarkTheme ? "light" : "dark"} theme`}
+            >
+              {isDarkTheme ? (
+                <Sun className="h-3.5 w-3.5" />
+              ) : (
+                <Moon className="h-3.5 w-3.5" />
+              )}
+              {isDarkTheme ? "Light" : "Dark"}
+            </button>
             <span
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-semibold ${
+              className={`inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-[12px] font-semibold ${
                 agentOk
                   ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                   : "border-slate-200 bg-slate-50 text-slate-500"
@@ -206,32 +257,31 @@ export default function Home() {
         </div>
       </nav>
 
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-6 py-10 lg:px-10">
-        {/* ── Incident Command Center (full-width single box) ── */}
+      <div className="mx-auto flex w-full max-w-[1540px] flex-col gap-7 px-6 py-8 lg:px-10">
+        {/* ── Autopilot Control Plane ─────────────────── */}
         <motion.section
           variants={fadeUp}
           initial="hidden"
           animate="visible"
-          className="hero-shell p-8 lg:p-10"
+          className="hero-shell p-9 lg:p-12"
         >
           <div className="hero-grid" aria-hidden />
-          <div className="relative flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
-            <div className="max-w-2xl">
-              <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">
-                <span className="inline-flex h-1.5 w-1.5 rounded-full bg-slate-900" />
-                SecureLoop · Control Plane
+          <div className="relative grid gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-start">
+            <div>
+              <div className="flex items-center gap-2 text-[12px] font-bold uppercase text-slate-500">
+                <span className="inline-flex h-2 w-2 rounded-full bg-red-500" />
+                SecureLoop · Autopilot
               </div>
-              <h1 className="mt-4 text-4xl font-bold tracking-tight text-slate-900 sm:text-[44px] leading-[1.05]">
-                Incident Command Center
+              <h1 className="mt-5 max-w-4xl text-[48px] font-black leading-[0.98] text-slate-950 sm:text-[64px]">
+                Production alerts, patched before the handoff.
               </h1>
-              <p className="mt-4 text-[15px] leading-7 text-slate-600">
-                A single pane of glass for every Sentry incident routed through
-                SecureLoop. Raw incidents stream in, the JetBrains plugin
-                handles human review, and Codex analysis plus approved fixes
-                flow through this dashboard in real time.
+              <p className="mt-5 max-w-3xl text-[18px] leading-8 text-slate-600">
+                Sentry fires, SecureLoop pulls the source, Codex writes the
+                smallest policy-aware fix, sandbox tests verify it, and
+                JetBrains keeps the human approval gate in the IDE.
               </p>
 
-              <div className="mt-7 flex flex-wrap items-center gap-2">
+              <div className="mt-8 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
                   onClick={() => {
@@ -252,7 +302,7 @@ export default function Home() {
                   rel="noreferrer"
                 >
                   <Zap className="h-3.5 w-3.5" />
-                  Launch IDE
+                  IDE Setup
                 </a>
                 <button
                   type="button"
@@ -279,28 +329,16 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Meta panel (base url + last sync) */}
-            <div className="shrink-0 rounded-xl border border-slate-200 bg-white/60 px-5 py-4 lg:min-w-[260px]">
-              <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
-                <Terminal className="h-3 w-3" />
-                Agent Endpoint
-              </div>
-              <code className="mt-2 block font-mono text-[12px] text-slate-700 break-all">
-                {agentBaseUrl}
-              </code>
-              <div className="mt-4 flex items-center justify-between text-[11px] text-slate-500">
-                <span className="uppercase tracking-[0.22em] text-slate-400">
-                  Last sync
-                </span>
-                <span className="font-mono tabular-nums text-slate-700">
-                  {lastSyncLabel ?? "—"}
-                </span>
-              </div>
-            </div>
+            <DemoLoop
+              agentBaseUrl={agentBaseUrl}
+              autopilotEnabled={autopilotEnabled}
+              codexAvailable={Boolean(status?.codexAvailable)}
+              lastSyncLabel={lastSyncLabel}
+            />
           </div>
 
           {error ? (
-            <div className="relative mt-6 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700">
+            <div className="relative mt-8 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[14px] font-semibold text-red-700">
               <AlertTriangle className="h-4 w-4 shrink-0" />
               {error}
             </div>
@@ -312,22 +350,22 @@ export default function Home() {
           variants={fadeUp}
           initial="hidden"
           animate="visible"
-          className="grid gap-4 lg:grid-cols-[minmax(260px,320px)_1fr]"
+          className="grid gap-4 lg:grid-cols-[minmax(320px,430px)_1fr]"
         >
           {/* Compact Agent Status strip */}
-          <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3">
+          <div className="flex items-center gap-4 rounded-lg border border-slate-200 bg-white px-5 py-5 shadow-sm shadow-slate-200/40">
             <div
-              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg ${
                 agentOk
                   ? "bg-emerald-100 text-emerald-600"
                   : "bg-slate-200 text-slate-500"
               }`}
             >
-              <Activity className="h-4 w-4" />
+              <Activity className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                <span className="text-[11px] font-bold uppercase text-slate-400">
                   Agent Status
                 </span>
                 <span
@@ -337,19 +375,19 @@ export default function Home() {
                   style={{ color: agentOk ? "#059669" : "#94a3b8" }}
                 />
               </div>
-              <div className="mt-0.5 truncate text-sm font-semibold text-slate-900">
+              <div className="mt-1 truncate text-[18px] font-black text-slate-950">
                 {agentOk ? "Connected" : "Unavailable"}
               </div>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1">
-              <span className="text-[9px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+              <span className="text-[10px] font-bold uppercase text-slate-400">
                 Debug
               </span>
               <span
-                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold ${
                   health?.allowDebugEndpoints
-                    ? "bg-emerald-50 text-emerald-600 border border-emerald-200"
-                    : "bg-slate-100 text-slate-500 border border-slate-200"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-600"
+                    : "border-slate-200 bg-slate-100 text-slate-500"
                 }`}
               >
                 {health?.allowDebugEndpoints ? "On" : "Off"}
@@ -391,14 +429,14 @@ export default function Home() {
           variants={fadeUp}
           initial="hidden"
           animate="visible"
-          className="flex items-center gap-4"
+          className="flex items-center gap-4 pt-2"
         >
-          <div className="flex items-center gap-2.5 rounded-full border border-slate-200 bg-white px-3.5 py-1.5">
+          <div className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-4 py-2 shadow-sm shadow-slate-200/40">
             <span className="rec-dot inline-flex h-2 w-2 rounded-full bg-red-500" />
-            <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-700">
+            <span className="text-[12px] font-black uppercase text-slate-700">
               Incident Feed
             </span>
-            <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-red-500">
+            <span className="text-[11px] font-bold uppercase text-red-500">
               Recording
             </span>
           </div>
@@ -419,16 +457,159 @@ export default function Home() {
 
       {/* ── Footer ────────────────────────────────────── */}
       <footer className="border-t border-slate-200 bg-slate-50/50 py-6">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 lg:px-10">
+        <div className="mx-auto flex max-w-[1540px] items-center justify-between px-6 lg:px-10">
           <p className="text-[11px] font-medium text-slate-500">
             SecureLoop · Built for JBHack
           </p>
           <p className="text-[11px] text-slate-400">
-            Auto-Scribe AI SRE Agent
+            Codex-in-IDE remediation loop
           </p>
         </div>
       </footer>
     </main>
+  );
+}
+
+function DemoLoop({
+  agentBaseUrl,
+  autopilotEnabled,
+  codexAvailable,
+  lastSyncLabel,
+}: {
+  agentBaseUrl: string;
+  autopilotEnabled: boolean;
+  codexAvailable: boolean;
+  lastSyncLabel: string | null;
+}) {
+  const steps: Array<{
+    label: string;
+    body: string;
+    Icon: typeof Activity;
+    tone: string;
+  }> = [
+    {
+      label: "Sentry",
+      body: "Production alert lands with stack trace and file path.",
+      Icon: AlertTriangle,
+      tone: "text-red-600 bg-red-50 border-red-200",
+    },
+    {
+      label: "Codex",
+      body: "Policy-aware diagnosis and minimal patch are generated.",
+      Icon: Zap,
+      tone: "text-sky-700 bg-sky-50 border-sky-200",
+    },
+    {
+      label: "Sandbox",
+      body: "Generated pytest proves the failure, then proves the fix.",
+      Icon: Activity,
+      tone: "text-amber-700 bg-amber-50 border-amber-200",
+    },
+    {
+      label: "JetBrains",
+      body: "Developer approves the diff in the IDE before shipping.",
+      Icon: CheckCircle2,
+      tone: "text-emerald-700 bg-emerald-50 border-emerald-200",
+    },
+  ];
+
+  return (
+    <div className="lg:border-l lg:border-slate-200 lg:pl-9">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <div className="text-[12px] font-black uppercase text-slate-400">
+            Live Remediation Loop
+          </div>
+          <div className="mt-1 text-[24px] font-black text-slate-950">
+            Alert to PR, with proof.
+          </div>
+        </div>
+        <span
+          className={`inline-flex items-center rounded-lg border px-3 py-2 text-[12px] font-black ${
+            autopilotEnabled
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : "border-amber-200 bg-amber-50 text-amber-700"
+          }`}
+        >
+          {autopilotEnabled ? "Autopilot Active" : "Autopilot Standby"}
+        </span>
+      </div>
+
+      <div className="mt-6 grid gap-3">
+        {steps.map((step, index) => (
+          <div
+            key={step.label}
+            className="grid grid-cols-[42px_1fr] items-start gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm shadow-slate-200/40"
+          >
+            <div
+              className={`flex h-9 w-9 items-center justify-center rounded-lg border ${step.tone}`}
+            >
+              <step.Icon className="h-4 w-4" />
+            </div>
+            <div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[13px] font-black text-slate-950">
+                  {index + 1}. {step.label}
+                </span>
+                <span className="font-mono text-[11px] text-slate-400">
+                  {index === 0 ? "trigger" : "auto"}
+                </span>
+              </div>
+              <p className="mt-1 text-[13px] leading-5 text-slate-600">
+                {step.body}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-5 grid gap-3 sm:grid-cols-3">
+        <StatusPill
+          label="Codex"
+          value={codexAvailable ? "Ready" : "Offline"}
+          active={codexAvailable}
+        />
+        <StatusPill
+          label="Last Sync"
+          value={lastSyncLabel ?? "Pending"}
+          active={Boolean(lastSyncLabel)}
+        />
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-500">
+          <div className="flex items-center gap-1.5 text-[9px] font-bold uppercase text-slate-400">
+            <Terminal className="h-3 w-3" />
+            Agent
+          </div>
+          <code className="mt-1 block truncate font-mono text-[11px] font-semibold text-slate-700">
+            {agentBaseUrl.replace("http://", "")}
+          </code>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatusPill({
+  label,
+  value,
+  active,
+}: {
+  label: string;
+  value: string;
+  active: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-lg border px-3 py-2 ${
+        active
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "border-slate-200 bg-slate-50 text-slate-500"
+      }`}
+    >
+      <div className="text-[9px] font-bold uppercase text-slate-400">
+        {label}
+      </div>
+      <div className="mt-0.5 font-mono text-[12px] font-black">{value}</div>
+    </div>
   );
 }
 
