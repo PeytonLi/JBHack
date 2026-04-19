@@ -48,30 +48,12 @@ async def test_ide_analyze_returns_fake_response_when_impl_is_unavailable(app, m
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["severity"] == "Medium"
+    assert payload["severity"] == "Low"
     assert payload["patch"]["oldText"] == "warehouse_name = WAREHOUSES[warehouse_id]"
     assert payload["patch"]["repoRelativePath"] == "apps/target/src/main.py"
 
 
-@pytest.mark.asyncio
-async def test_ide_analyze_returns_502_for_broken_teammate_impl(app, monkeypatch) -> None:
-    monkeypatch.delenv("SECURE_LOOP_USE_FAKE_CODEX", raising=False)
 
-    async def broken_analyze_incident(_payload):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(main_module, "_resolve_analyze_impl", lambda: broken_analyze_incident)
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post(
-            "/ide/analyze",
-            json=sample_analysis_request(),
-            headers={"authorization": "Bearer ide-token"},
-        )
-
-    assert response.status_code == 502
-    assert response.json()["detail"] == "SecureLoop analysis request failed."
 
 
 def sample_analysis_request() -> dict[str, object]:

@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import re
 
-from .models import AnalysisPatch, AnalysisRequest, AnalysisResponse
+from .models import AnalyzePatch, AnalysisRequest, AnalyzeIncidentResponse
 
 
 VALID_SEVERITIES = {"Critical", "High", "Medium", "Low"}
 
 
-def parse_analysis_response(raw_text: str) -> AnalysisResponse:
+def parse_analysis_response(raw_text: str) -> AnalyzeIncidentResponse:
     cleaned = (
         raw_text.strip()
         .removeprefix("```json")
@@ -18,12 +18,12 @@ def parse_analysis_response(raw_text: str) -> AnalysisResponse:
         .strip()
     )
     payload = json.loads(cleaned)
-    return AnalysisResponse.model_validate(payload)
+    return AnalyzeIncidentResponse.model_validate(payload)
 
 
 def validate_analysis_response(
     request: AnalysisRequest,
-    response: AnalysisResponse,
+    response: AnalyzeIncidentResponse,
 ) -> list[str]:
     errors: list[str] = []
 
@@ -78,7 +78,7 @@ def normalize_policy_rules(policy_text: str, values: list[str]) -> list[str]:
     return [value for value in values if value in valid_ids]
 
 
-def ensure_diff_matches_patch(response: AnalysisResponse) -> AnalysisResponse:
+def ensure_diff_matches_patch(response: AnalyzeIncidentResponse) -> AnalyzeIncidentResponse:
     expected_diff = build_unified_diff(
         repo_relative_path=response.patch.repo_relative_path,
         old_text=response.patch.old_text,
@@ -94,8 +94,8 @@ def build_patch(
     repo_relative_path: str,
     old_text: str,
     new_text: str,
-) -> AnalysisPatch:
-    return AnalysisPatch(
+) -> AnalyzePatch:
+    return AnalyzePatch(
         repo_relative_path=repo_relative_path,
         old_text=old_text,
         new_text=new_text,

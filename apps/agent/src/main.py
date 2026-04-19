@@ -172,6 +172,15 @@ def create_app(
         await app.state.broker.publish(incident)
         return JSONResponse(incident.model_dump(mode="json", by_alias=True), status_code=201)
 
+    @app.post("/ide/analyze")
+    async def analyze_incident_endpoint_full(
+        payload: AnalysisRequest,
+        request: Request,
+    ) -> JSONResponse:
+        _verify_ide_request(request, app.state.settings)
+        response = await run_codex_analysis(payload)
+        return JSONResponse(response.model_dump(mode="json", by_alias=True))
+
     @app.post("/ide/events/{incident_id}/analyze")
     async def analyze_incident_endpoint(
         incident_id: str,
