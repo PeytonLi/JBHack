@@ -1,5 +1,5 @@
 <div align="center">
-**SecureLoop**
+SecureLoop
 
 <div align="center">
 
