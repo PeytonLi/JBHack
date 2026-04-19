@@ -46,11 +46,16 @@ function translateAgentEvent(
     switch (payload.step) {
       case "fetch_source":
       case "analyze":
-      case "sandbox":
         return [{ incidentId, step: "analyzing", status: "running" }];
+      case "sandbox":
+        return [
+          { incidentId, step: "analyzing", status: "completed" },
+          { incidentId, step: "sandbox", status: "running" },
+        ];
       case "open_pr":
         return [
           { incidentId, step: "analyzing", status: "completed" },
+          { incidentId, step: "sandbox", status: "completed" },
           { incidentId, step: "pr_opening", status: "running" },
         ];
       default:
@@ -70,7 +75,11 @@ function translateAgentEvent(
   }
 
   const reason = payload.reason ?? "unknown";
-  const failedStep = PRE_PR_FAILURE_REASONS.has(reason) ? "analyzing" : "pr_opening";
+  const failedStep = reason.startsWith("sandbox_")
+    ? "sandbox"
+    : PRE_PR_FAILURE_REASONS.has(reason)
+      ? "analyzing"
+      : "pr_opening";
   return [
     {
       incidentId,
