@@ -1,156 +1,308 @@
 # SecureLoop
 
-SecureLoop turns production Sentry alerts into Codex-generated, sandbox-tested,
-human-approved fixes inside JetBrains.
+<div align="center">
 
-**One-line pitch:** production alert to verified PR, with the developer still in
-control.
+**AI security remediation that closes the loop from production alert to verified PR.**
 
-```text
-alert -> diagnose -> patch -> sandbox -> PR -> IDE approval
-```
+`detect -> diagnose -> patch -> sandbox -> review -> ship`
 
-Built for the **JetBrains Codex Hackathon 2026**.
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://python.org)
+[![Kotlin](https://img.shields.io/badge/Kotlin-JVM-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
+[![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)](https://nextjs.org)
+[![OpenAI](https://img.shields.io/badge/OpenAI-Codex-111111?logo=openai&logoColor=white)](https://openai.com)
 
-## Why It Matters
+Built at the JetBrains Codex Hackathon 2026 in San Francisco.
 
-Security and reliability tools usually stop at detection.
+</div>
 
-- Sentry catches a production error, then leaves the developer with a stack trace.
-- Dependency scanners flag risk, then leave the developer with a dashboard.
-- AI assistants can suggest code, but usually lack the incident, policy, repo,
-  verification, and review context in one loop.
+## The Problem
 
-SecureLoop connects those steps. A real production-shaped alert enters the agent,
-Codex reasons over source context and project policy, a sandbox test checks the
-patch, and the final review stays in JetBrains before code is shipped.
+Security tools still hand developers disconnected fragments.
+
+- Sentry shows the production failure, but not the fix.
+- Dependency scanners show vulnerable packages, but not the application-level patch.
+- AI chat can suggest code, but usually lacks the stack trace, repo policy,
+  dependency context, verification result, and IDE approval surface.
+
+That leaves developers doing security incident response by copy-paste: move the
+stack trace into chat, explain the repo manually, write a fix manually, hope the
+fix is safe, then open a PR manually.
+
+SecureLoop turns that fragmented workflow into one controlled remediation loop.
+
+## The Pitch
+
+SecureLoop is a JetBrains-native AI security agent that converts a real
+production-shaped alert into an OWASP/CWE-framed diagnosis, policy-aware patch,
+sandbox proof, and developer-approved PR.
+
+The key idea is simple: detection is not enough. Security tooling should carry a
+finding all the way to a reviewable, verified fix, while keeping a human in the
+loop before anything ships.
 
 ## What We Built
 
-SecureLoop is a local developer workflow with four pieces:
+SecureLoop has four cooperating pieces:
 
-- **FastAPI agent**: receives Sentry webhooks, stores incidents, runs Codex
-  analysis, launches the autopilot pipeline, and emits live events.
-- **JetBrains plugin**: shows incidents in the IDE, opens the affected file,
-  highlights the line, renders analysis, and keeps the human approval surface.
-- **Next.js dashboard**: shows the live incident queue, autopilot progress,
-  session history, and light/dark stage mode for the demo.
-- **Demo target app**: intentionally vulnerable/broken service used to produce
-  reproducible incidents.
+- **FastAPI agent**: receives Sentry webhooks, normalizes incidents, runs Codex
+  analysis, performs dependency checks, executes the autopilot pipeline, and
+  streams state to the UI.
+- **JetBrains plugin**: opens the affected file, highlights the line, renders
+  severity, CWE, OWASP-style category, policy evidence, patch diff, and gives
+  the developer the final approval gate.
+- **Next.js dashboard**: shows live incidents, autopilot progress, reviewed
+  history, PR state, and a stage-ready light/dark demo mode.
+- **Demo target app**: intentionally broken FastAPI service used to produce
+  reproducible incident traffic.
 
-## Primary Demo Flow
+## The Five Modules
+
+SecureLoop is strongest when it is shown as a security loop, not just a
+dashboard or plugin. The current hackathon build implements the center of that
+loop and leaves the broader proactive surface as roadmap.
+
+### Module 1 - Production signal ingestion
+
+Sentry sends a signed webhook. SecureLoop normalizes the event into an incident
+with repo path, line number, exception type, environment, and source context.
+This is real-world impact, not a hypothetical scan result.
+
+**Status:** implemented.
+
+### Module 2 - Vulnerability diagnosis
+
+Codex receives the stack trace, nearby source, dependency scan output, and
+`security-policy.md`. It returns a structured diagnosis with severity, CWE,
+OWASP-style category, root cause, impact, violated policy rules, and fix plan.
+
+**Status:** implemented for incident and selected-file analysis.
+
+### Module 3 - Dependency checker
+
+The agent runs `pip-audit` and feeds the result into the Codex prompt, so the
+diagnosis can distinguish application-code failures from dependency risk.
+
+**Status:** implemented for Python dependency context.
+
+### Module 4 - Remediation + human approval gate
+
+Codex produces a minimal patch and PR narrative. SecureLoop validates the patch,
+runs a generated pytest sandbox for Python incidents, then presents the evidence
+inside JetBrains for approval or rejection.
+
+**Status:** implemented.
+
+### Module 5 - Production verification
+
+The long-term loop is to watch Sentry after merge for recurrence of the same
+CWE/error class, then reopen the loop if the fix did not hold.
+
+**Status:** roadmap, intentionally separated from the hackathon build.
+
+## The Closed Loop
 
 ```text
-Sentry alert
-  -> signed webhook reaches SecureLoop agent
-  -> incident appears on dashboard via SSE
-  -> autopilot fetches the affected source file from GitHub
-  -> Codex analyzes stack trace, source context, dependency context, and policy
-  -> Codex returns severity, CWE, root cause, fix plan, diff, and PR narrative
-  -> agent applies the patch in memory
-  -> generated pytest sandbox verifies the original failure and patched behavior
-  -> GitHub PR is opened, or local PR artifacts are written as fallback
-  -> JetBrains opens the file for developer review and approval
+Production error
+  -> Sentry sends a signed webhook
+  -> SecureLoop normalizes the issue into a repo-relative incident
+  -> dashboard updates live over SSE
+  -> agent fetches the affected source file from GitHub
+  -> agent reads security-policy.md and dependency context
+  -> Codex returns severity, CWE, OWASP-style category, and a minimal patch
+  -> validator checks the response shape and patch preconditions
+  -> sandbox runner generates and executes a pytest reproduction/fix test
+  -> agent opens a GitHub PR, or writes local PR artifacts as fallback
+  -> JetBrains opens the exact file and line for human review
 ```
 
-The design intentionally keeps a human in the loop. SecureLoop can propose and
-verify a fix, but it does not ask developers to blindly trust an agent.
+This is not a passive scanner and not a prompt wrapper. It is a consequence-layer
+security workflow: the system starts from something that affected users, ties it
+back to source code, proposes the smallest safe fix, verifies it, and puts the
+developer back in control inside the IDE.
 
-## Implemented Today
+## How It Works End-to-End
 
-- Sentry webhook ingestion with signature verification
-- Sentry issue/error normalization into repo-relative incidents
-- SQLite incident store and live SSE broker
-- dashboard incident stream with open/reviewed queues
-- dashboard autopilot stage view with light/dark theme toggle
-- JetBrains plugin tool window for incidents and line highlighting
-- Open-in-IDE navigation from dashboard/agent to the plugin
-- Codex-backed analysis path with structured JSON validation
-- `security-policy.md` as repo-local policy context for analysis/fixes
-- dependency scan context using `pip-audit`
-- autopilot source fetch from GitHub
-- generated sandbox pytest step for Python incidents
-- GitHub PR creation with rich generated title/body
-- local PR artifact fallback when GitHub PR creation fails
-- manual/local fallback paths: `Scan Current File`, `Run Demo`, `Analyze with Codex`,
-  `Approve Fix`, `Reject`, and `Mark Reviewed`
+SecureLoop has two demo entry points. Both converge on the same security
+diagnosis and remediation path.
 
-## What Makes It Different
+### Entry Point A - Production alert autopilot
 
-| Tool | Typical output | Where it stops |
+```text
+Runtime error hits the target service
+        -> Sentry captures the event
+        -> Sentry fires a signed webhook to /sentry/webhook
+        -> agent normalizes the alert and stores it in SQLite
+        -> dashboard and JetBrains receive the update over SSE
+        -> autopilot fetches the affected source file from GitHub
+```
+
+### Entry Point B - Pre-commit local scan
+
+```text
+Developer opens a file in JetBrains
+        -> Scan Current File creates a local SecureLoop incident
+        -> plugin sends selected-file context to /ide/analyze
+        -> Codex returns severity, CWE, OWASP-style category, policy evidence,
+           fix plan, and patch
+```
+
+The current proactive path is explicit because it is safer for a live demo. The
+roadmap is automatic on-save scanning and Alt+Enter secure-code generation.
+
+### Shared diagnosis and fix loop
+
+```text
+incident or scan context
+        -> source window + security-policy.md + dependency context
+        -> Codex structured diagnosis
+        -> validator enforces response shape and patch constraints
+        -> sandbox test proves the patch for Python incidents
+        -> PR or local PR artifact is produced
+        -> JetBrains remains the human approval gate
+```
+
+## The Security Model
+
+SecureLoop is built around three constraints.
+
+### 1. Policy beats generic AI advice
+
+Every analysis request includes `security-policy.md`. In this repo, the policy
+defines rules for:
+
+- SQL and database access
+- error handling
+- secrets
+- minimal, convention-matching fixes
+- PR security rationale
+
+Codex is not asked "what is a good fix in general?" It is asked "what is an
+acceptable fix under this codebase's security policy?"
+
+### 2. The patch must be reviewable
+
+SecureLoop returns structured fields, not just prose:
+
+- severity
+- OWASP-style category
+- CWE
+- root cause
+- attack scenario
+- impact
+- violated policy rules
+- fix plan
+- unified diff
+- patch object
+- PR title/body narrative
+
+That structure is what lets the dashboard, PR body, and JetBrains plugin all
+show the same evidence without another round of interpretation.
+
+### 3. Humans approve the consequence
+
+The agent can analyze, patch, test, and prepare a PR. The developer still owns
+the merge decision. In the plugin, the human can inspect the affected line, read
+the reasoning, view the diff, approve the fix, reject it, or open the PR.
+
+Security decisions carry accountability. SecureLoop is designed to surface the
+evidence, not hide it behind an autonomous black box.
+
+## Cybersecurity Constitution
+
+The long-term product idea is `security-policy.md` as a standard file in every
+serious repository.
+
+Repos already carry files that help tools understand the project:
+
+- `README.md` explains the project to humans.
+- `.gitignore` explains repository hygiene to Git.
+- `package.json` or `pyproject.toml` explains dependencies to tooling.
+
+There is no equivalent standard file that tells AI coding agents how to classify
+and remediate security risk for this specific codebase. SecureLoop treats
+`security-policy.md` as that missing contract: a version-controlled security
+constitution that coding agents must follow when mapping incidents to CWE,
+OWASP-style categories, policy violations, and patches.
+
+That is the sponsor-aligned thesis: Codex becomes much more valuable inside the
+IDE when it is grounded in the repo's own rules, files, failures, and approval
+flow.
+
+## What Makes SecureLoop Different
+
+| Tool | What it gives you | Where it stops |
 | --- | --- | --- |
-| Sentry | Stack trace and issue | Investigation starts |
-| Snyk / pip-audit | Vulnerable dependency | Developer must decide and patch |
-| AI chat | Suggested fix | Context transfer and verification are manual |
-| SecureLoop | Incident, analysis, patch, sandbox proof, PR, IDE approval | Developer reviews a verified code change |
+| Sentry | Production error and stack trace | Investigation begins |
+| Snyk / pip-audit | Dependency vulnerability signal | Developer must map it to code |
+| SonarQube / static analysis | Pattern or rule violation | Fix and verification are separate |
+| AI chat | Suggested code | Context, policy, tests, and PR are manual |
+| SecureLoop | Incident, policy-aware diagnosis, patch, sandbox proof, PR, IDE review | Human decides whether to ship |
 
-SecureLoop operates in the consequence layer: it starts from a real alert,
-connects it back to code, and produces a reviewable fix with evidence.
+The differentiator is not that SecureLoop uses AI. The differentiator is that
+the AI is placed inside an evidence-producing security workflow.
 
-## Why JetBrains + Codex
+## Implemented In This Hackathon Build
 
-This is not a chatbot wrapped around a repo.
+- signed Sentry webhook ingestion
+- Sentry issue/error normalization into repo-relative incidents
+- SQLite incident store
+- live SSE streams for dashboard and IDE
+- dashboard open/reviewed queues
+- dashboard autopilot progress view
+- dashboard light/dark stage mode
+- JetBrains tool window for incident review
+- IDE file opening and line highlighting
+- Codex analysis with structured severity, CWE, OWASP-style category, and patch
+  output
+- validation and retry path for malformed Codex responses
+- `security-policy.md` prompt context
+- `pip-audit` dependency scan context
+- GitHub source fetch for affected files
+- generated pytest sandbox step for Python incidents
+- GitHub PR creation with generated title/body
+- local PR artifact fallback when GitHub PR creation fails
+- manual fallback paths: `Run Demo`, `Scan Current File`, `Analyze with Codex`,
+  `Approve Fix`, `Reject`, `Show Diff`, `Open PR`, and `Mark Reviewed`
 
-- **JetBrains** is the control surface: affected files open in the IDE, the
-  relevant line is highlighted, and the developer approves or rejects the patch
-  where they already work.
-- **Codex** is the remediation engine: it receives the incident, source context,
-  dependency context, and policy text, then returns structured analysis and a
-  minimal patch.
-- **The agent** connects the loop: Sentry, GitHub, sandbox verification,
-  dashboard state, and JetBrains events all stay synchronized.
+## Demo Narrative
 
-## What To Watch In The Demo
+Judges should watch for five proof points:
 
-1. A production-shaped Sentry alert lands in SecureLoop.
-2. The dashboard moves from detection to Codex diagnosis to sandbox proof.
-3. JetBrains opens the exact file and line tied to the alert.
-4. The developer reviews the generated fix with severity, CWE, policy evidence,
-   diff, and PR narrative.
-5. The fix is opened as a PR, or written as local PR artifacts if GitHub is not
-   available during the live demo.
-
-## Policy-Aware Fixes
-
-The repository includes `security-policy.md`, which acts as local guidance for
-Codex. It defines banned patterns, required error-handling behavior, secret
-handling expectations, and fix constraints.
-
-That is why the demo uses the phrase **smallest policy-aware fix**:
-
-- **smallest**: minimize blast radius during incident remediation
-- **policy-aware**: use repo-specific constraints instead of generic internet
-  advice
-- **fix**: produce a concrete patch, not just a summary
-
-The broader product idea is that every serious repo should ship a
-`security-policy.md` next to its README and `.gitignore`, so AI coding tools have
-project-specific security rules instead of generic advice.
+1. **Real signal enters the system**: a Sentry-shaped alert lands in SecureLoop.
+2. **The agent does more than summarize**: it fetches source, reads policy,
+   checks dependencies, and asks Codex for structured remediation.
+3. **The output is security-specific**: severity, CWE, OWASP-style category,
+   root cause, impact, policy violation, fix plan, and prevention are shown.
+4. **The fix is tested before handoff**: the sandbox step proves the generated
+   patch behavior before PR handoff.
+5. **JetBrains is the approval gate**: the developer reviews the exact file,
+   line, diff, and PR context inside the IDE.
 
 ## Architecture
 
 ```text
 JBHack/
 ├── apps/
-│   ├── agent/                 # FastAPI companion service and autopilot
+│   ├── agent/
 │   │   └── src/
-│   │       ├── main.py             # HTTP routes, Sentry webhooks, SSE streams
+│   │       ├── main.py             # FastAPI routes, webhooks, SSE, IDE endpoints
 │   │       ├── autopilot.py        # Sentry -> source -> Codex -> sandbox -> PR
-│   │       ├── codex_analysis.py   # Codex analysis and sandbox test generation
+│   │       ├── codex_analysis.py   # Codex analysis + sandbox test generation
 │   │       ├── codex_client.py     # OpenAI client wrapper
+│   │       ├── prompt_builder.py   # Policy-aware prompt construction
+│   │       ├── validator.py        # Structured response validation
 │   │       ├── dep_check.py        # pip-audit dependency context
-│   │       ├── github_client.py    # source fetch and PR/local artifact output
+│   │       ├── github_client.py    # source fetch, PR creation, local fallback
 │   │       ├── sandbox_runner.py   # generated pytest sandbox execution
-│   │       ├── storage.py          # SQLite incident store and SSE broker
-│   │       └── validator.py        # structured response validation
+│   │       └── storage.py          # SQLite store and live event broker
 │   │
-│   ├── dashboard/             # Next.js live dashboard
-│   ├── jetbrains-plugin/      # Kotlin JetBrains plugin
-│   └── target/                # Intentionally vulnerable demo service
+│   ├── dashboard/                  # Next.js incident and autopilot UI
+│   ├── jetbrains-plugin/           # Kotlin JetBrains plugin
+│   └── target/                     # intentionally vulnerable FastAPI app
 │
-├── security-policy.md         # Repo-local security policy for Codex
-├── docs/                      # Runbooks, design notes, demo scripts
-└── LICENSE                    # MIT
+├── security-policy.md              # repo-local security rules for Codex
+├── docs/                           # runbooks and demo notes
+└── LICENSE                         # MIT
 ```
 
 ## Important Agent Endpoints
@@ -158,6 +310,7 @@ JBHack/
 - `GET /health`
 - `GET /status`
 - `GET /incidents`
+- `GET /incidents/{incident_id}/pipeline-state`
 - `GET /dashboard/events/stream`
 - `POST /sentry/webhook`
 - `GET /ide/events/stream`
@@ -208,8 +361,8 @@ Open the dashboard at the printed Next.js URL, usually:
 http://localhost:3000
 ```
 
-If another app is already on port 3000, Next.js will print another port such as
-`3001`.
+If another app is already using port 3000, Next.js will print another port such
+as `3001`.
 
 ## Real Sentry Demo Setup
 
@@ -221,34 +374,28 @@ If another app is already on port 3000, Next.js will print another port such as
 https://<your-ngrok-domain>/sentry/webhook
 ```
 
-4. Confirm the dashboard shows:
+4. Confirm the dashboard shows the agent online and autopilot ready.
+5. Trigger the target incident.
+6. Watch the pipeline move through:
 
 ```text
-Agent Online
-Autopilot Active
-Codex Ready
-```
-
-5. Trigger the target incident and watch the dashboard pipeline progress through:
-
-```text
-Sentry -> Codex -> Sandbox -> PR -> JetBrains review
+Sentry -> Codex -> Sandbox -> PR -> JetBrains
 ```
 
 ## Local Fallback Demo
 
-If live Sentry or ngrok fails during judging, the repo still supports a local
-fallback:
+If Sentry, ngrok, GitHub, or the OpenAI API misbehaves during judging, the repo
+still has local fallback paths:
 
 - `Run Demo` creates a Sentry-shaped local incident.
-- `Scan Current File` analyzes the active editor file.
-- `Analyze with Codex` runs the structured analysis path.
+- `Scan Current File` creates a proactive local scan from the active editor.
+- `Analyze with Codex` calls the structured analysis path.
 - `Approve Fix` applies the patch locally in the IDE.
-- `Reject` discards the suggestion.
+- `Reject` discards the generated fix.
 - PR creation falls back to local artifacts under `apps/agent/out/`.
 
-This fallback is for demo reliability; the primary pitch is the Sentry-driven
-autopilot loop.
+The primary pitch is the Sentry-driven autopilot loop. The fallback exists so the
+demo still has a working path under hackathon network conditions.
 
 ## Verification
 
@@ -278,8 +425,38 @@ GRADLE_USER_HOME=$PWD/.gradle-home sh ./gradlew compileKotlin
 | `SECURE_LOOP_IDE_AUTO_LAUNCH` | Enables agent-assisted JetBrains sandbox launch |
 | `DASHBOARD_ORIGIN` | Optional CORS origin for dashboard |
 
-Autopilot is considered active when `OPENAI_API_KEY`, `GITHUB_TOKEN`, and
-`GITHUB_REPO` are configured.
+Autopilot is active when `OPENAI_API_KEY`, `GITHUB_TOKEN`, and `GITHUB_REPO` are
+configured.
+
+## Future Vision
+
+SecureLoop started with a production-alert remediation loop, but the larger
+security platform is:
+
+```text
+write secure code -> scan before commit -> fix with policy -> ship with proof
+-> watch production -> feed recurrence back into the policy
+```
+
+The long-term product is a JetBrains security control plane for AI-assisted
+development:
+
+- **While writing code**: Codex suggestions are constrained by
+  `security-policy.md`, so secure patterns show up before the vulnerable pattern
+  is committed.
+- **Before commit**: current-file and whole-repo checks classify risky code using
+  severity, CWE, OWASP-style category, and local policy violations.
+- **Before merge**: SecureLoop creates minimal PRs with fix rationale,
+  dependency context, generated tests, and human-readable security evidence.
+- **After deploy**: Sentry recurrence becomes a feedback signal. If the same
+  CWE/error class reappears, SecureLoop marks the fix as incomplete and reopens
+  the loop.
+- **Across the organization**: `security-policy.md` becomes the shared security
+  contract consumed by Codex, JetBrains, CI, and code review.
+
+This is the bigger bet: AI coding agents should not just generate code. They
+should operate against a version-controlled security constitution, produce
+evidence, and leave developers with final authority over the change.
 
 ## Roadmap
 
@@ -287,9 +464,10 @@ These are product directions, not claims about the current hackathon build:
 
 - Alt+Enter secure-code generation while writing code
 - automatic on-save whole-file vulnerability scanning
+- richer static-analysis integration for proactive findings
 - dependency-fix PRs across broader ecosystems
 - post-merge Sentry recurrence monitoring for the same CWE class
-- richer policy tuning from rejected fixes
+- rejected-fix feedback loop for policy tuning
 - organization-wide `security-policy.md` standardization
 
 ## Team
