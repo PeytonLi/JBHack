@@ -1,44 +1,10 @@
+import { IncidentStream } from "./incident-stream";
+import type {
+  AgentHealthResponse,
+  IncidentFeedResponse,
+} from "./types";
+
 export const dynamic = "force-dynamic";
-
-type IncidentStatus = "open" | "reviewed";
-
-type IncidentRecord = {
-  incident: {
-    incidentId: string;
-    issueId: string;
-    title: string;
-    projectSlug: string | null;
-    environment: string | null;
-    exceptionType: string;
-    exceptionMessage: string;
-    repoRelativePath: string | null;
-    lineNumber: number | null;
-    functionName: string | null;
-    codeContext: string | null;
-    eventWebUrl: string;
-    receivedAt: string;
-  };
-  status: IncidentStatus;
-  createdAt: string;
-  reviewedAt: string | null;
-};
-
-type IncidentFeedResponse = {
-  summary: {
-    openCount: number;
-    reviewedCount: number;
-    totalCount: number;
-  };
-  incidents: IncidentRecord[];
-};
-
-type AgentHealthResponse = {
-  status: string;
-  allowDebugEndpoints: boolean;
-  openIncidentCount: number;
-  reviewedIncidentCount: number;
-  totalIncidentCount: number;
-};
 
 type DashboardData = {
   health: AgentHealthResponse | null;
@@ -89,114 +55,8 @@ async function fetchDashboardData(): Promise<DashboardData> {
   }
 }
 
-function formatTimestamp(value: string | null): string {
-  if (!value) {
-    return "Not yet reviewed";
-  }
-
-  const date = new Date(value);
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
-}
-
-function statusClasses(status: IncidentStatus): string {
-  return status === "open"
-    ? "border-red-500/40 bg-red-500/10 text-red-100"
-    : "border-emerald-500/40 bg-emerald-500/10 text-emerald-100";
-}
-
-function IncidentCard({ record }: { record: IncidentRecord }) {
-  const location = [record.incident.repoRelativePath, record.incident.lineNumber]
-    .filter(Boolean)
-    .join(":");
-
-  return (
-    <article className="rounded-3xl border border-white/10 bg-slate-950/70 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.35)]">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] ${statusClasses(record.status)}`}
-            >
-              {record.status}
-            </span>
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs uppercase tracking-[0.22em] text-slate-300">
-              {record.incident.environment ?? "unknown env"}
-            </span>
-          </div>
-          <h2 className="text-xl font-semibold text-white">
-            {record.incident.exceptionType}: {record.incident.title}
-          </h2>
-          <p className="max-w-2xl text-sm leading-6 text-slate-300">
-            {record.incident.exceptionMessage}
-          </p>
-        </div>
-
-        <a
-          className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-sm font-medium text-cyan-100 transition hover:border-cyan-300/60 hover:bg-cyan-400/20"
-          href={record.incident.eventWebUrl}
-          target="_blank"
-          rel="noreferrer"
-        >
-          Open Sentry
-        </a>
-      </div>
-
-      <dl className="mt-5 grid gap-3 text-sm text-slate-300 md:grid-cols-2">
-        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-          <dt className="text-xs uppercase tracking-[0.2em] text-slate-500">
-            Location
-          </dt>
-          <dd className="mt-2 font-mono text-sm text-slate-100">
-            {location || "Location unavailable"}
-          </dd>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-          <dt className="text-xs uppercase tracking-[0.2em] text-slate-500">
-            Function
-          </dt>
-          <dd className="mt-2 font-mono text-sm text-slate-100">
-            {record.incident.functionName ?? "Unknown function"}
-          </dd>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-          <dt className="text-xs uppercase tracking-[0.2em] text-slate-500">
-            Received
-          </dt>
-          <dd className="mt-2 text-slate-100">
-            {formatTimestamp(record.createdAt)}
-          </dd>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-          <dt className="text-xs uppercase tracking-[0.2em] text-slate-500">
-            Review State
-          </dt>
-          <dd className="mt-2 text-slate-100">
-            {record.status === "reviewed"
-              ? `Reviewed ${formatTimestamp(record.reviewedAt)}`
-              : "Waiting for a human review in the IDE"}
-          </dd>
-        </div>
-      </dl>
-
-      {record.incident.codeContext ? (
-        <pre className="mt-5 overflow-x-auto rounded-2xl border border-amber-300/20 bg-amber-50/5 p-4 text-sm leading-6 text-amber-50">
-          <code>{record.incident.codeContext}</code>
-        </pre>
-      ) : null}
-    </article>
-  );
-}
-
 export default async function Home() {
   const { health, feed, error, agentBaseUrl } = await fetchDashboardData();
-  const incidents = feed?.incidents ?? [];
-  const openIncidents = incidents.filter((record) => record.status === "open");
-  const reviewedIncidents = incidents.filter(
-    (record) => record.status === "reviewed",
-  );
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.18),transparent_32%),linear-gradient(180deg,#020617_0%,#0f172a_52%,#111827_100%)] text-slate-100">
@@ -289,55 +149,7 @@ export default async function Home() {
           </div>
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-2">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-semibold text-white">
-                Open Incidents
-              </h2>
-              <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-red-100">
-                {openIncidents.length} active
-              </span>
-            </div>
-            {openIncidents.length > 0 ? (
-              openIncidents.map((record) => (
-                <IncidentCard
-                  key={record.incident.incidentId}
-                  record={record}
-                />
-              ))
-            ) : (
-              <div className="rounded-[2rem] border border-dashed border-white/15 bg-white/5 p-8 text-sm leading-7 text-slate-300">
-                No open incidents are waiting in the queue. Trigger `Run Demo`
-                in the plugin or hit the broken checkout path to generate one.
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-semibold text-white">
-                Reviewed History
-              </h2>
-              <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">
-                {reviewedIncidents.length} reviewed
-              </span>
-            </div>
-            {reviewedIncidents.length > 0 ? (
-              reviewedIncidents.map((record) => (
-                <IncidentCard
-                  key={record.incident.incidentId}
-                  record={record}
-                />
-              ))
-            ) : (
-              <div className="rounded-[2rem] border border-dashed border-white/15 bg-white/5 p-8 text-sm leading-7 text-slate-300">
-                Reviewed incidents appear here after a developer clicks
-                `Mark Reviewed` inside the SecureLoop tool window.
-              </div>
-            )}
-          </div>
-        </section>
+        <IncidentStream initialFeed={feed} agentBaseUrl={agentBaseUrl} />
       </div>
     </main>
   );
