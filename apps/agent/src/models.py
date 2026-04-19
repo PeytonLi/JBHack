@@ -127,6 +127,22 @@ class AnalyzePatch(CamelModel):
     new_text: str
 
 
+class DepVuln(CamelModel):
+    id: str
+    severity: str
+    package: str
+    version: str
+    fixed_version: str | None = None
+    summary: str
+
+
+class DepCheckResult(CamelModel):
+    scanner: Literal["pip-audit"]
+    vulnerabilities: list[DepVuln] = Field(default_factory=list)
+    advisory_url: str | None = None
+    scanned_at: datetime
+
+
 class AnalyzeIncidentResponse(CamelModel):
     severity: Literal["Critical", "High", "Medium", "Low"]
     category: str
@@ -137,6 +153,8 @@ class AnalyzeIncidentResponse(CamelModel):
     fix_plan: list[str]
     diff: str
     patch: AnalyzePatch
+    reasoning_steps: list[str] = Field(default_factory=list, max_length=8)
+    dep_check: DepCheckResult | None = None
 
 
 class DebugIncidentRequest(CamelModel):

@@ -9,7 +9,12 @@ from typing import Literal
 
 import aiosqlite
 
-from .models import IncidentRecord, IncidentSummary, NormalizedIncident
+from .models import (
+    AnalyzeIncidentResponse,
+    IncidentRecord,
+    IncidentSummary,
+    NormalizedIncident,
+)
 
 
 class IncidentStore:
@@ -47,6 +52,17 @@ class IncidentStore:
                 )
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_incidents_issue_id ON incidents(issue_id)"
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS analysis_records (
+                    incident_id TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE
+                )
+                """
             )
             await db.commit()
 
@@ -279,6 +295,38 @@ class IncidentStore:
 
     async def acknowledge(self, incident_id: str) -> bool:
         return await self.mark_reviewed(incident_id)
+
+    async def put_analysis(
+        self,
+        incident_id: str,
+        analysis: AnalyzeIncidentResponse,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        payload = analysis.model_dump_json(by_alias=True)
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO analysis_records (
+                    incident_id, payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(incident_id) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (incident_id, payload, now, now),
+            )
+            await db.commit()
+
+    async def get_analysis(self, incident_id: str) -> AnalyzeIncidentResponse | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT payload_json FROM analysis_records WHERE incident_id = ?",
+                (incident_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return AnalyzeIncidentResponse.model_validate_json(row[0])
 
 
 class IncidentBroker:

@@ -22,6 +22,24 @@ data class AnalyzePatch(
 )
 
 @Serializable
+data class DepVuln(
+    val id: String,
+    val severity: String,
+    val `package`: String,
+    val version: String,
+    val fixedVersion: String? = null,
+    val summary: String,
+)
+
+@Serializable
+data class DepCheckResult(
+    val scanner: String,
+    val vulnerabilities: List<DepVuln> = emptyList(),
+    val advisoryUrl: String? = null,
+    val scannedAt: String,
+)
+
+@Serializable
 data class AnalyzeIncidentResponse(
     val severity: String,
     val category: String,
@@ -32,6 +50,17 @@ data class AnalyzeIncidentResponse(
     val fixPlan: List<String>,
     val diff: String,
     val patch: AnalyzePatch,
+    val reasoningSteps: List<String> = emptyList(),
+    val depCheck: DepCheckResult? = null,
+)
+
+@Serializable
+data class PullRequestResult(
+    val prUrl: String? = null,
+    val prNumber: Int? = null,
+    val branch: String? = null,
+    val localArtifactPath: String? = null,
+    val error: String? = null,
 )
 
 sealed interface AnalysisState {
@@ -43,7 +72,7 @@ sealed interface AnalysisState {
 
     data object Applying : AnalysisState
 
-    data object Applied : AnalysisState
+    data class Applied(val stagedInGit: Boolean = false) : AnalysisState
 
     data object Failed : AnalysisState
 }

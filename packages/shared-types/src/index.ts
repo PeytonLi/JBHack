@@ -68,3 +68,47 @@ export type IncidentResolution =
       status: "unresolved";
       reason: "file_not_found" | "line_missing" | "no_open_project";
     };
+
+export interface DepVuln {
+  id: string;
+  severity: string;
+  package: string;
+  version: string;
+  fixedVersion: string | null;
+  summary: string;
+}
+
+export interface DepCheckResult {
+  scanner: "pip-audit";
+  vulnerabilities: DepVuln[];
+  advisoryUrl: string | null;
+  scannedAt: string;
+}
+
+export interface AnalyzePatch {
+  repoRelativePath: string;
+  oldText: string;
+  newText: string;
+}
+
+export interface AnalyzeIncidentResponse {
+  severity: "Critical" | "High" | "Medium" | "Low";
+  category: string;
+  cwe: string;
+  title: string;
+  explanation: string;
+  violatedPolicy: string[];
+  fixPlan: string[];
+  diff: string;
+  patch: AnalyzePatch;
+  reasoningSteps: string[];
+  depCheck: DepCheckResult | null;
+}
+
+export interface PullRequestResult {
+  prUrl: string | null;
+  prNumber: number | null;
+  branch: string | null;
+  localArtifactPath: string | null;
+  error: string | null;
+}
