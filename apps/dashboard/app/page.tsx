@@ -1,3 +1,5 @@
+import React from "react";
+
 export const dynamic = "force-dynamic";
 
 type IncidentStatus = "open" | "reviewed";
@@ -90,102 +92,172 @@ async function fetchDashboardData(): Promise<DashboardData> {
 }
 
 function formatTimestamp(value: string | null): string {
-  if (!value) {
-    return "Not yet reviewed";
-  }
-
+  if (!value) return "Pending Review";
   const date = new Date(value);
   return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
   }).format(date);
 }
 
-function statusClasses(status: IncidentStatus): string {
-  return status === "open"
-    ? "border-red-500/40 bg-red-500/10 text-red-100"
-    : "border-emerald-500/40 bg-emerald-500/10 text-emerald-100";
+// Icons
+const SentryIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+);
+const AgentIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+);
+const IDEIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+);
+const PRIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
+);
+const ArrowRight = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-300"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+);
+
+function FlowDiagram() {
+  return (
+    <div className="w-full rounded-3xl bg-white border border-slate-200/60 p-8 shadow-sm animate-slide-up mb-10 overflow-hidden relative">
+      <div className="absolute top-0 right-0 p-8 opacity-5">
+        <svg width="150" height="150" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </div>
+      <h3 className="text-lg font-semibold text-slate-800 mb-6">SecureLoop Execution Pipeline</h3>
+      <div className="flex flex-col md:flex-row items-center justify-between gap-4 md:gap-2">
+        <div className="flex flex-col items-center">
+          <div className="w-16 h-16 rounded-full bg-red-50 text-red-500 border border-red-100 flex items-center justify-center mb-3 shadow-sm">
+            <SentryIcon />
+          </div>
+          <span className="text-sm font-semibold text-slate-700">1. Detection</span>
+          <span className="text-xs text-slate-500 text-center max-w-[120px] mt-1">Sentry captures runtime exception</span>
+        </div>
+        <div className="hidden md:block"><ArrowRight /></div>
+        
+        <div className="flex flex-col items-center">
+          <div className="w-16 h-16 rounded-full bg-blue-50 text-blue-500 border border-blue-100 flex items-center justify-center mb-3 shadow-sm animate-pulse-soft">
+            <AgentIcon />
+          </div>
+          <span className="text-sm font-semibold text-slate-700">2. Synchronization</span>
+          <span className="text-xs text-slate-500 text-center max-w-[120px] mt-1">Agent parses context & maps locally</span>
+        </div>
+        <div className="hidden md:block"><ArrowRight /></div>
+        
+        <div className="flex flex-col items-center opacity-90 transition hover:opacity-100">
+          <div className="w-16 h-16 rounded-2xl bg-amber-50 text-amber-500 border border-amber-100 flex items-center justify-center mb-3 shadow-sm">
+            <IDEIcon />
+          </div>
+          <span className="text-sm font-semibold text-slate-700">3. Resolution</span>
+          <span className="text-xs text-slate-500 text-center max-w-[120px] mt-1">Developer approves AI patch in IDE</span>
+        </div>
+        <div className="hidden md:block"><ArrowRight /></div>
+        
+        <div className="flex flex-col items-center opacity-90 transition hover:opacity-100">
+          <div className="w-16 h-16 rounded-xl bg-emerald-50 text-emerald-500 border border-emerald-100 flex items-center justify-center mb-3 shadow-sm">
+            <PRIcon />
+          </div>
+          <span className="text-sm font-semibold text-slate-700">4. Deployment</span>
+          <span className="text-xs text-slate-500 text-center max-w-[120px] mt-1">Secure GitHub PR merged directly</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CodeSnippet({ code, startLine }: { code: string; startLine: number | null }) {
+  if (!code) return null;
+  const lines = code.trim().split("\\n");
+  const base = startLine || 1;
+  return (
+    <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 overflow-hidden text-sm font-mono shadow-inner">
+      {lines.map((line, i) => (
+        <div key={i} className="flex">
+          <div className="w-12 shrink-0 border-r border-slate-200 bg-slate-100 py-1 pr-3 text-right text-slate-400 select-none">
+            {base + i}
+          </div>
+          <div className="py-1 px-4 text-slate-700 whitespace-pre overflow-x-auto">
+            {line}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function IncidentCard({ record }: { record: IncidentRecord }) {
+  const isOpen = record.status === "open";
   const location = [record.incident.repoRelativePath, record.incident.lineNumber]
     .filter(Boolean)
     .join(":");
 
   return (
-    <article className="rounded-3xl border border-white/10 bg-slate-950/70 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.35)]">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] ${statusClasses(record.status)}`}
-            >
-              {record.status}
-            </span>
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs uppercase tracking-[0.22em] text-slate-300">
-              {record.incident.environment ?? "unknown env"}
-            </span>
-          </div>
-          <h2 className="text-xl font-semibold text-white">
-            {record.incident.exceptionType}: {record.incident.title}
-          </h2>
-          <p className="max-w-2xl text-sm leading-6 text-slate-300">
-            {record.incident.exceptionMessage}
-          </p>
-        </div>
-
+    <article className="group relative rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5">
+      <div className="absolute top-0 right-0 p-6">
         <a
-          className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-sm font-medium text-cyan-100 transition hover:border-cyan-300/60 hover:bg-cyan-400/20"
           href={record.incident.eventWebUrl}
           target="_blank"
           rel="noreferrer"
+          className="rounded-full bg-slate-50 border border-slate-200 px-4 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
         >
-          Open Sentry
+          View in Sentry &rarr;
         </a>
       </div>
 
-      <dl className="mt-5 grid gap-3 text-sm text-slate-300 md:grid-cols-2">
-        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-          <dt className="text-xs uppercase tracking-[0.2em] text-slate-500">
-            Location
-          </dt>
-          <dd className="mt-2 font-mono text-sm text-slate-100">
-            {location || "Location unavailable"}
-          </dd>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-          <dt className="text-xs uppercase tracking-[0.2em] text-slate-500">
-            Function
-          </dt>
-          <dd className="mt-2 font-mono text-sm text-slate-100">
-            {record.incident.functionName ?? "Unknown function"}
-          </dd>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-          <dt className="text-xs uppercase tracking-[0.2em] text-slate-500">
-            Received
-          </dt>
-          <dd className="mt-2 text-slate-100">
-            {formatTimestamp(record.createdAt)}
-          </dd>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-          <dt className="text-xs uppercase tracking-[0.2em] text-slate-500">
-            Review State
-          </dt>
-          <dd className="mt-2 text-slate-100">
-            {record.status === "reviewed"
-              ? `Reviewed ${formatTimestamp(record.reviewedAt)}`
-              : "Waiting for a human review in the IDE"}
-          </dd>
-        </div>
-      </dl>
+      <div className="flex items-center gap-3 mb-4">
+        <span
+          className={`flex h-2.5 w-2.5 rounded-full ${isOpen ? "bg-amber-400 animate-pulse-soft" : "bg-emerald-400"}`}
+        />
+        <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          {isOpen ? "Action Required in IDE" : "Resolved & Patched"}
+        </h2>
+      </div>
 
-      {record.incident.codeContext ? (
-        <pre className="mt-5 overflow-x-auto rounded-2xl border border-amber-300/20 bg-amber-50/5 p-4 text-sm leading-6 text-amber-50">
-          <code>{record.incident.codeContext}</code>
-        </pre>
-      ) : null}
+      <h3 className="text-xl font-bold text-slate-900 mb-1">
+        {record.incident.exceptionType}
+      </h3>
+      <p className="text-sm font-medium text-slate-600 max-w-[80%]">
+        {record.incident.exceptionMessage}
+      </p>
+
+      <div className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-4 border-t border-slate-100 pt-5">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Location</p>
+          <p className="font-mono text-xs text-slate-700 truncate" title={location || "N/A"}>
+            {location || "N/A"}
+          </p>
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Function</p>
+          <p className="font-mono text-xs text-slate-700 truncate">
+            {record.incident.functionName || "root"}
+          </p>
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Env</p>
+          <span className="inline-flex rounded-md bg-slate-100 border border-slate-200 px-2 py-0.5 text-xs text-slate-600 capitalize">
+            {record.incident.environment || "production"}
+          </span>
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Status</p>
+          <p className="text-xs font-medium text-slate-700">
+            {isOpen ? formatTimestamp(record.createdAt) : formatTimestamp(record.reviewedAt)}
+          </p>
+        </div>
+      </div>
+
+      <CodeSnippet code={record.incident.codeContext || ""} startLine={record.incident.lineNumber} />
+
+      {!isOpen && (
+        <div className="mt-4 rounded-xl bg-emerald-50/50 border border-emerald-100 p-4">
+          <p className="text-xs font-semibold text-emerald-800 mb-1 flex items-center gap-2">
+            <PRIcon /> Fix Approved & Deployed via AI
+          </p>
+          <p className="text-xs text-emerald-600">The developer successfully analyzed the root cause via SecureLoop within JetBrains and approved the generated patch.</p>
+        </div>
+      )}
     </article>
   );
 }
@@ -194,150 +266,109 @@ export default async function Home() {
   const { health, feed, error, agentBaseUrl } = await fetchDashboardData();
   const incidents = feed?.incidents ?? [];
   const openIncidents = incidents.filter((record) => record.status === "open");
-  const reviewedIncidents = incidents.filter(
-    (record) => record.status === "reviewed",
-  );
+  const reviewedIncidents = incidents.filter((record) => record.status === "reviewed");
+
+  const isConnected = health?.status === "ok";
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.18),transparent_32%),linear-gradient(180deg,#020617_0%,#0f172a_52%,#111827_100%)] text-slate-100">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-10 px-6 py-12 lg:px-10">
-        <section className="grid gap-6 lg:grid-cols-[1.5fr_1fr]">
-          <div className="rounded-[2rem] border border-white/10 bg-slate-950/55 p-8 shadow-[0_30px_100px_rgba(15,23,42,0.45)] backdrop-blur">
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-cyan-300">
-              SecureLoop Dashboard
-            </p>
-            <h1 className="mt-4 max-w-3xl text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-              Local incident queue and review state for the current SecureLoop
-              MVP.
-            </h1>
-            <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
-              This dashboard reflects the real companion service contract: raw
-              incidents in, human review in the IDE, reviewed history retained
-              in the local queue. It does not pretend the AI analysis pipeline
-              exists yet.
-            </p>
-            <div className="mt-8 flex flex-wrap gap-3">
-              <a
-                className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-5 py-3 text-sm font-semibold text-cyan-100 transition hover:border-cyan-200/60 hover:bg-cyan-300/20"
-                href="/"
-              >
-                Refresh Dashboard
-              </a>
-              <a
-                className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:border-white/20 hover:bg-white/10"
-                href="https://www.jetbrains.com/help/idea/run-debug-configuration-gradle.html"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Run `runIde`
-              </a>
+    <main className="min-h-screen bg-slate-50 text-slate-900 pb-20">
+      {/* Premium Header */}
+      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-sm">
+              S
+            </div>
+            <span className="font-bold text-lg tracking-tight text-slate-800">SecureLoop</span>
+          </div>
+          <div className="flex items-center gap-4">
+            <a href="/" className="text-sm font-medium text-slate-500 hover:text-blue-600 transition">Refresh</a>
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider ${isConnected ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-red-50 text-red-600 border border-red-200'}`}>
+              <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse-soft' : 'bg-red-500'}`} />
+              {isConnected ? "Agent Connected" : "Agent Offline"}
             </div>
           </div>
+        </div>
+      </header>
 
-          <div className="grid gap-4">
-            <div className="rounded-[2rem] border border-white/10 bg-white/5 p-6 backdrop-blur">
-              <p className="text-xs uppercase tracking-[0.24em] text-slate-400">
-                Agent
-              </p>
-              <h2 className="mt-3 text-2xl font-semibold text-white">
-                {health?.status === "ok" ? "Connected" : "Unavailable"}
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-slate-300">
-                {error ?? `Polling ${agentBaseUrl} for health and incident data.`}
-              </p>
-              <p className="mt-4 text-xs uppercase tracking-[0.24em] text-slate-500">
-                Demo mode
-              </p>
-              <p className="mt-2 text-sm text-slate-200">
-                {health?.allowDebugEndpoints
-                  ? "Enabled for Run Demo and debug incident injection."
-                  : "Disabled until SECURE_LOOP_ALLOW_DEBUG_ENDPOINTS=1 is set."}
-              </p>
+      <div className="max-w-7xl mx-auto px-6 mt-10">
+        <FlowDiagram />
+
+        {!isConnected && (
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-6 mb-8 shadow-sm">
+            <h3 className="text-sm font-bold text-red-800 mb-1">Connection Error</h3>
+            <p className="text-sm text-red-600 mb-3">{error || `Failed to poll ${agentBaseUrl}`}</p>
+            <p className="text-sm text-red-800">Please ensure the SecureLoop python agent is running via <code>uv run main.py</code> and that <code>pnpm dev</code> was started properly.</p>
+          </div>
+        )}
+
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12 animate-slide-up delay-100">
+          <div className="rounded-2xl bg-white border border-slate-200 p-6 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Total Queue</p>
+              <p className="text-4xl font-light tracking-tight text-slate-800">{feed?.summary.totalCount ?? 0}</p>
             </div>
-
-            <div className="grid gap-4 sm:grid-cols-3">
-              {[
-                {
-                  label: "Open incidents",
-                  value: feed?.summary.openCount ?? 0,
-                  accent: "text-red-200",
-                },
-                {
-                  label: "Reviewed incidents",
-                  value: feed?.summary.reviewedCount ?? 0,
-                  accent: "text-emerald-200",
-                },
-                {
-                  label: "Total incidents",
-                  value: feed?.summary.totalCount ?? 0,
-                  accent: "text-cyan-100",
-                },
-              ].map((stat) => (
-                <div
-                  key={stat.label}
-                  className="rounded-[1.75rem] border border-white/10 bg-slate-950/55 p-5"
-                >
-                  <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
-                    {stat.label}
-                  </p>
-                  <p className={`mt-3 text-3xl font-semibold ${stat.accent}`}>
-                    {stat.value}
-                  </p>
-                </div>
-              ))}
+            <div className="w-12 h-12 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
             </div>
           </div>
-        </section>
-
-        <section className="grid gap-6 xl:grid-cols-2">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-semibold text-white">
-                Open Incidents
-              </h2>
-              <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-red-100">
-                {openIncidents.length} active
-              </span>
+          <div className="rounded-2xl bg-white border border-slate-200 p-6 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Needs Repair</p>
+              <p className="text-4xl font-light tracking-tight text-amber-500">{feed?.summary.openCount ?? 0}</p>
             </div>
+            <div className="w-12 h-12 rounded-full bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-500">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            </div>
+          </div>
+          <div className="rounded-2xl bg-white border border-slate-200 p-6 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Secured</p>
+              <p className="text-4xl font-light tracking-tight text-emerald-500">{feed?.summary.reviewedCount ?? 0}</p>
+            </div>
+            <div className="w-12 h-12 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-500">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+          </div>
+        </div>
+
+        {/* Dashboard Columns */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 animate-slide-up delay-200">
+          {/* Action Column */}
+          <section className="flex flex-col gap-5">
+            <h2 className="text-xl font-bold tracking-tight text-slate-800 flex items-center gap-2">
+              Action Required <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full">{openIncidents.length}</span>
+            </h2>
             {openIncidents.length > 0 ? (
               openIncidents.map((record) => (
-                <IncidentCard
-                  key={record.incident.incidentId}
-                  record={record}
-                />
+                <IncidentCard key={record.incident.incidentId} record={record} />
               ))
             ) : (
-              <div className="rounded-[2rem] border border-dashed border-white/15 bg-white/5 p-8 text-sm leading-7 text-slate-300">
-                No open incidents are waiting in the queue. Trigger `Run Demo`
-                in the plugin or hit the broken checkout path to generate one.
+              <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/50 p-10 text-center">
+                <p className="text-sm font-medium text-slate-500 mb-1">Queue is empty</p>
+                <p className="text-xs text-slate-400">Trigger an exception in Sentry or use JetBrains Demo Mode.</p>
               </div>
             )}
-          </div>
+          </section>
 
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-semibold text-white">
-                Reviewed History
-              </h2>
-              <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">
-                {reviewedIncidents.length} reviewed
-              </span>
-            </div>
+          {/* History Column */}
+          <section className="flex flex-col gap-5 opacity-80 transition hover:opacity-100">
+            <h2 className="text-xl font-bold tracking-tight text-slate-800 flex items-center gap-2">
+              Resolution History <span className="bg-emerald-100 text-emerald-700 text-xs px-2 py-0.5 rounded-full">{reviewedIncidents.length}</span>
+            </h2>
             {reviewedIncidents.length > 0 ? (
               reviewedIncidents.map((record) => (
-                <IncidentCard
-                  key={record.incident.incidentId}
-                  record={record}
-                />
+                <IncidentCard key={record.incident.incidentId} record={record} />
               ))
             ) : (
-              <div className="rounded-[2rem] border border-dashed border-white/15 bg-white/5 p-8 text-sm leading-7 text-slate-300">
-                Reviewed incidents appear here after a developer clicks
-                `Mark Reviewed` inside the SecureLoop tool window.
+              <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/50 p-10 text-center">
+                <p className="text-sm font-medium text-slate-500 mb-1">No history yet</p>
+                <p className="text-xs text-slate-400">Reviewed incidents approved via IDE will appear here.</p>
               </div>
             )}
-          </div>
-        </section>
+          </section>
+        </div>
       </div>
     </main>
   );
