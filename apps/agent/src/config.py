@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import os
+import re
 import secrets
 import sys
 from dataclasses import dataclass
@@ -10,6 +12,48 @@ from dotenv import load_dotenv
 
 
 load_dotenv()
+
+_logger = logging.getLogger("secureloop.agent.config")
+
+_OWNER_REPO_RE = re.compile(r"^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?$")
+
+
+def normalize_github_repo(value: str | None) -> str | None:
+    """Return a validated ``owner/repo`` string, or ``None`` when unset.
+
+    Accepts the plain ``owner/repo`` form, full https/ssh github.com URLs, and an
+    optional ``.git`` suffix. Raises ``ValueError`` when the value is present but
+    cannot be reduced to a single ``owner/repo`` pair.
+    """
+    if value is None:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+
+    candidate = raw
+    if candidate.startswith(("http://", "https://")):
+        stripped = candidate.split("://", 1)[1]
+        host, _, path = stripped.partition("/")
+        if host.lower() not in {"github.com", "www.github.com"}:
+            raise ValueError(
+                f"GITHUB_REPO must point at github.com; got host '{host}' in '{raw}'."
+            )
+        candidate = path
+    elif candidate.startswith("git@"):
+        _, _, path = candidate.partition(":")
+        candidate = path
+
+    candidate = candidate.strip("/")
+    match = _OWNER_REPO_RE.match(candidate)
+    if not match:
+        raise ValueError(
+            f"GITHUB_REPO must be in 'owner/repo' form; got: {raw!r}."
+        )
+    normalized = f"{match.group(1)}/{match.group(2)}"
+    if normalized != raw:
+        _logger.info("Normalized GITHUB_REPO %r -> %r", raw, normalized)
+    return normalized
 
 
 @dataclass(slots=True)
@@ -31,7 +75,12 @@ class Settings:
     ide_launch_cwd: Path | None = None
 
     def autopilot_enabled(self) -> bool:
-        return bool(self.github_token) and bool(self.github_repo) and bool(self.openai_api_key)
+        return (
+            bool(self.github_token)
+            and bool(self.github_repo)
+            and "/" in (self.github_repo or "")
+            and bool(self.openai_api_key)
+        )
 
 
 def load_settings() -> Settings:
@@ -63,7 +112,7 @@ def load_settings() -> Settings:
         ide_token=ide_token,
         agent_port=int(os.getenv("AGENT_PORT", "8001")),
         github_token=os.getenv("GITHUB_TOKEN") or None,
-        github_repo=os.getenv("GITHUB_REPO") or None,
+        github_repo=normalize_github_repo(os.getenv("GITHUB_REPO")),
         openai_api_key=os.getenv("OPENAI_API_KEY") or None,
         openai_model=(
             os.getenv("OPENAI_MODEL")
