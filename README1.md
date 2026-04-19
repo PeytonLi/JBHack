@@ -29,7 +29,9 @@ A developer gets a Sentry alert at 2am. They copy the stack trace into a chat wi
 
 ## What We Built
 
-![SecureLoop Architecture](./secureloop_plugin_vision.svg)
+<p align="center">
+  <img src="./secureloop_plugin_vision.svg" width="600" alt="SecureLoop Architecture" />
+</p>
 
 SecureLoop is a JetBrains plugin backed by an AI agent. It takes a production error from Sentry, maps it to the exact line in your local code, classifies the vulnerability against OWASP and CWE standards, generates a patch using Codex, and presents it to the developer for approval — before a single line changes. Once approved, it opens a GitHub PR with the full diagnosis attached.
 
