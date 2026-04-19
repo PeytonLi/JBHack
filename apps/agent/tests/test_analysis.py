@@ -54,6 +54,24 @@ async def test_ide_analyze_returns_fake_response_when_impl_is_unavailable(app, m
 
 
 @pytest.mark.asyncio
+async def test_ide_analyze_uses_demo_fallback_for_empty_body(app, monkeypatch) -> None:
+    monkeypatch.delenv("SECURE_LOOP_USE_FAKE_CODEX", raising=False)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/ide/analyze",
+            headers={"authorization": "Bearer ide-token"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["severity"] == "Medium"
+    assert payload["patch"]["oldText"] == "warehouse_name = WAREHOUSES[warehouse_id]"
+    assert payload["patch"]["repoRelativePath"] == "apps/target/src/main.py"
+
+
+@pytest.mark.asyncio
 async def test_ide_analyze_returns_502_for_broken_teammate_impl(app, monkeypatch) -> None:
     monkeypatch.delenv("SECURE_LOOP_USE_FAKE_CODEX", raising=False)
 

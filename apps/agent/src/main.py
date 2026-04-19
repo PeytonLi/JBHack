@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable, Literal
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
@@ -163,8 +163,14 @@ def create_app(
         return Response(status_code=204)
 
     @app.post("/ide/analyze", response_model=AnalyzeIncidentResponse)
-    async def analyze_incident(payload: AnalyzeIncidentRequest, request: Request) -> AnalyzeIncidentResponse:
+    async def analyze_incident(
+        request: Request,
+        payload: AnalyzeIncidentRequest | None = Body(default=None),
+    ) -> AnalyzeIncidentResponse:
         _verify_ide_request(request, app.state.settings)
+        if payload is None:
+            logger.warning("Received empty /ide/analyze body; using deterministic demo analysis payload.")
+            payload = _build_demo_analysis_request()
         return await _resolve_analysis(payload)
 
     @app.post("/debug/incidents", status_code=201)
@@ -221,6 +227,26 @@ async def _resolve_analysis(payload: AnalyzeIncidentRequest) -> AnalyzeIncidentR
 
 def _use_fake_codex() -> bool:
     return os.getenv("SECURE_LOOP_USE_FAKE_CODEX", "0").strip() in TRUTHY_ENV_VALUES
+
+
+def _build_demo_analysis_request() -> AnalyzeIncidentRequest:
+    return AnalyzeIncidentRequest(
+        incident_id="debug-empty-analyze-body",
+        repo_relative_path="apps/target/src/main.py",
+        line_number=45,
+        exception_type="RuntimeError",
+        exception_message="SecureLoop demo mode",
+        title="SecureLoop demo incident",
+        source_context="warehouse_name = WAREHOUSES[warehouse_id]",
+        policy_text="\n".join(
+            [
+                "# SecureLoop Security Policy",
+                "",
+                "## Error Handling",
+                "- Do not expose stack traces or internal exception messages to end users.",
+            ]
+        ),
+    )
 
 
 def _resolve_analyze_impl() -> Callable[[AnalyzeIncidentRequest], Any] | None:

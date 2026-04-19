@@ -5,18 +5,23 @@ import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.markup.EffectType
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.TextAttributes
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.JBColor
 import dev.secureloop.plugin.model.AgentConnectionState
+import dev.secureloop.plugin.model.AnalysisState
+import dev.secureloop.plugin.model.AnalyzeIncidentRequest
 import dev.secureloop.plugin.model.IncidentPresentation
 import dev.secureloop.plugin.model.NormalizedIncident
 import dev.secureloop.plugin.model.ProjectCompatibilityState
@@ -29,6 +34,7 @@ import java.awt.Color
 import java.awt.Font
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.text.Regex
 
 @Service(Service.Level.PROJECT)
 class SecureLoopProjectService(
@@ -93,6 +99,146 @@ class SecureLoopProjectService(
         upsertIncident(presentation.copy(reviewed = true))
     }
 
+    fun analyzeSelection(presentation: IncidentPresentation) {
+        val resolved = presentation.resolution as? ResolutionState.Resolved ?: return
+        if (connectionState !is AgentConnectionState.Connected) {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop is not connected to the local agent.")
+            return
+        }
+
+        val repoRelativePath = repoRelativePathFor(presentation, resolved)
+        if (repoRelativePath == null) {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop could not determine the repo-relative path.")
+            return
+        }
+
+        val resolvedFile = resolvedVirtualFile(resolved.filePath)
+        if (resolvedFile == null) {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop could not open the resolved file.")
+            return
+        }
+
+        val sourceContext = collectSourceContext(resolvedFile, resolved.lineNumber)
+        if (sourceContext == null) {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop could not collect source context.")
+            return
+        }
+
+        val policyText = readPolicyText()
+        if (policyText == null) {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop could not read security-policy.md from the project root.")
+            return
+        }
+
+        updateIncident(presentation.incident.incidentId) {
+            it.copy(
+                analysisState = AnalysisState.Loading,
+                analysisError = null,
+            )
+        }
+
+        service<SecureLoopApplicationService>().analyzeIncident(
+            payload = AnalyzeIncidentRequest(
+                incidentId = presentation.incident.incidentId,
+                repoRelativePath = repoRelativePath,
+                lineNumber = resolved.lineNumber,
+                exceptionType = presentation.incident.exceptionType,
+                exceptionMessage = presentation.incident.exceptionMessage,
+                title = presentation.incident.title,
+                sourceContext = sourceContext,
+                policyText = policyText,
+            ),
+            onSuccess = { analysis ->
+                updateIncident(presentation.incident.incidentId) {
+                    it.copy(
+                        analysis = analysis,
+                        analysisState = AnalysisState.Ready,
+                        analysisError = null,
+                    )
+                }
+            },
+            onError = { message ->
+                failAnalysis(presentation.incident.incidentId, message)
+            },
+        )
+    }
+
+    fun rejectAnalysis(presentation: IncidentPresentation) {
+        updateIncident(presentation.incident.incidentId) {
+            it.copy(
+                analysis = null,
+                analysisState = AnalysisState.Idle,
+                analysisError = null,
+            )
+        }
+    }
+
+    fun approveFix(presentation: IncidentPresentation) {
+        val resolved = presentation.resolution as? ResolutionState.Resolved ?: run {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop can only apply fixes for resolved incidents.")
+            return
+        }
+        val analysis = presentation.analysis ?: run {
+            failAnalysis(presentation.incident.incidentId, "Run Analyze with Codex before approving a fix.")
+            return
+        }
+
+        val resolvedFile = resolvedVirtualFile(resolved.filePath) ?: run {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop could not reopen the resolved file.")
+            return
+        }
+        val document = FileDocumentManager.getInstance().getDocument(resolvedFile) ?: run {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop could not load a writable document for the resolved file.")
+            return
+        }
+
+        if (!patchMatchesTarget(presentation, resolved, analysis.patch.repoRelativePath)) {
+            failAnalysis(presentation.incident.incidentId, "Patch target does not match the selected incident.")
+            return
+        }
+
+        val currentText = document.text
+        val occurrenceCount = Regex.fromLiteral(analysis.patch.oldText).findAll(currentText).count()
+        if (occurrenceCount != 1) {
+            failAnalysis(
+                presentation.incident.incidentId,
+                "Patch precondition failed: expected oldText exactly once, found $occurrenceCount matches.",
+            )
+            return
+        }
+
+        val updatedText = currentText.replaceFirst(analysis.patch.oldText, analysis.patch.newText)
+        if (updatedText == currentText) {
+            failAnalysis(presentation.incident.incidentId, "Patch precondition failed: replacement produced no file changes.")
+            return
+        }
+
+        updateIncident(presentation.incident.incidentId) {
+            it.copy(
+                analysisState = AnalysisState.Applying,
+                analysisError = null,
+            )
+        }
+
+        try {
+            WriteCommandAction.runWriteCommandAction(project) {
+                document.setText(updatedText)
+                FileDocumentManager.getInstance().saveDocument(document)
+            }
+            updateIncident(presentation.incident.incidentId) {
+                it.copy(
+                    analysisState = AnalysisState.Applied,
+                    analysisError = null,
+                )
+            }
+        } catch (exception: Throwable) {
+            failAnalysis(
+                presentation.incident.incidentId,
+                "SecureLoop could not apply the approved patch: ${exception.message ?: "unknown error"}.",
+            )
+        }
+    }
+
     fun runDemoIncident() {
         if (projectCompatibility is ProjectCompatibilityState.DemoReady) {
             service<SecureLoopApplicationService>().triggerDemoIncident()
@@ -150,6 +296,23 @@ class SecureLoopProjectService(
 
         ApplicationManager.getApplication().invokeLater {
             panel?.upsertIncident(presentation)
+        }
+    }
+
+    private fun updateIncident(
+        incidentId: String,
+        transform: (IncidentPresentation) -> IncidentPresentation,
+    ) {
+        val existing = incidents.firstOrNull { it.incident.incidentId == incidentId } ?: return
+        upsertIncident(transform(existing))
+    }
+
+    private fun failAnalysis(incidentId: String, message: String) {
+        updateIncident(incidentId) {
+            it.copy(
+                analysisState = AnalysisState.Failed,
+                analysisError = message,
+            )
         }
     }
 
@@ -211,6 +374,77 @@ class SecureLoopProjectService(
             is FileResolution.Ambiguous -> ResolutionState.Ambiguous(candidates)
             is FileResolution.Unresolved -> ResolutionState.Unresolved(reason)
         }
+    }
+
+    private fun resolvedVirtualFile(filePath: String): VirtualFile? {
+        return ProjectFileResolver.findByAbsolutePath(project, filePath)
+    }
+
+    private fun repoRelativePathFor(
+        presentation: IncidentPresentation,
+        resolved: ResolutionState.Resolved,
+    ): String? {
+        presentation.incident.repoRelativePath?.takeIf { it.isNotBlank() }?.let { return normalizePath(it) }
+        val basePath = project.basePath ?: return null
+        val root = Path.of(basePath).normalize()
+        val filePath = Path.of(resolved.filePath).normalize()
+        return try {
+            normalizePath(root.relativize(filePath).toString())
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
+
+    private fun collectSourceContext(file: VirtualFile, lineNumber: Int): String? {
+        val text = currentFileText(file) ?: return null
+        val lines = text.lines()
+        if (lines.isEmpty()) {
+            return text
+        }
+
+        val zeroBasedLine = (lineNumber - 1).coerceIn(0, lines.lastIndex)
+        val start = (zeroBasedLine - 8).coerceAtLeast(0)
+        val end = (zeroBasedLine + 8).coerceAtMost(lines.lastIndex)
+        return lines.subList(start, end + 1).joinToString("\n")
+    }
+
+    private fun currentFileText(file: VirtualFile): String? {
+        val document = FileDocumentManager.getInstance().getDocument(file)
+        if (document != null) {
+            return document.text
+        }
+        return try {
+            String(file.contentsToByteArray(), file.charset)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun readPolicyText(): String? {
+        val basePath = project.basePath ?: return null
+        val policyPath = Path.of(basePath).resolve("security-policy.md").normalize()
+        return try {
+            Files.readString(policyPath)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun patchMatchesTarget(
+        presentation: IncidentPresentation,
+        resolved: ResolutionState.Resolved,
+        patchPath: String,
+    ): Boolean {
+        val normalizedPatchPath = normalizePath(patchPath)
+        val normalizedIncidentPath = presentation.incident.repoRelativePath?.let(::normalizePath)
+        val normalizedResolvedPath = normalizePath(resolved.filePath)
+        return normalizedPatchPath == normalizedIncidentPath ||
+            normalizedResolvedPath.endsWith("/$normalizedPatchPath") ||
+            normalizedResolvedPath == normalizedPatchPath
+    }
+
+    private fun normalizePath(path: String): String {
+        return path.replace("\\", "/").trim().removePrefix("file:///")
     }
 
     private fun detectProjectCompatibility(): ProjectCompatibilityState {
