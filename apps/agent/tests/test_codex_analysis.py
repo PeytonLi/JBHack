@@ -12,14 +12,15 @@ async def test_codex_analysis_returns_demo_fallback_without_api_key(monkeypatch)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("SECURE_LOOP_USE_FAKE_CODEX", raising=False)
 
-    response = await analyze_incident(sample_request())
+    request = sample_request()
+    response = await analyze_incident(request)
 
     assert response.severity == "Medium"
-    assert response.category == "Unhandled exception"
+    assert response.category == "Runtime exception"
     assert response.cwe == "CWE-703"
     assert response.patch.repo_relative_path == "apps/target/src/main.py"
-    assert response.patch.old_text == "    warehouse_name = WAREHOUSES[warehouse_id]"
-    assert "    warehouse_name = WAREHOUSES.get(warehouse_id)" in response.patch.new_text
+    assert response.patch.old_text == request.source_context.strip()
+    assert "# TODO: replace with an approved SecureLoop fix." in response.patch.new_text
 
 
 @pytest.mark.asyncio
@@ -27,21 +28,37 @@ async def test_codex_analysis_respects_fake_mode_even_with_api_key(monkeypatch) 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("SECURE_LOOP_USE_FAKE_CODEX", "1")
 
-    response = await analyze_incident(sample_request())
+    request = sample_request()
+    response = await analyze_incident(request)
 
-    assert response.title == "Guard missing warehouse lookup in checkout flow"
-    assert response.patch.old_text in sample_request().source_context
+    assert response.title == (
+        f"Review {request.exception_type} handling in {request.repo_relative_path}"
+    )
+    assert response.patch.old_text in request.source_context
 
 
 @pytest.mark.asyncio
-async def test_codex_analysis_fallback_detects_warehouse_issue_without_exact_line(monkeypatch) -> None:
+async def test_codex_analysis_fallback_produces_generic_todo_when_path_unanchored(monkeypatch) -> None:
+    """Fallback should produce the generic TODO patch regardless of incident text."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("SECURE_LOOP_USE_FAKE_CODEX", raising=False)
 
-    response = await analyze_incident(sample_request(line_number=7))
+    request = AnalyzeIncidentRequest(
+        incident_id="unrelated-bug",
+        repo_relative_path="services/unrelated.py",
+        line_number=12,
+        exception_type="RuntimeError",
+        exception_message="something blew up",
+        title="Warehouse not found in log",
+        source_context="x = compute()",
+        policy_text="# SecureLoop Security Policy",
+    )
 
-    assert response.title == "Guard missing warehouse lookup in checkout flow"
-    assert response.patch.old_text == "    warehouse_name = WAREHOUSES[warehouse_id]"
+    response = await analyze_incident(request)
+
+    assert response.patch.old_text == "x = compute()"
+    assert "# TODO: replace with an approved SecureLoop fix." in response.patch.new_text
+    assert "WAREHOUSES" not in response.patch.new_text
 
 
 @pytest.mark.asyncio

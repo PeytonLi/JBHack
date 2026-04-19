@@ -564,9 +564,6 @@ def _resolve_analyze_impl() -> Callable[[AnalyzeIncidentRequest], Any] | None:
 
 
 def _build_fake_analysis(payload: AnalyzeIncidentRequest) -> AnalyzeIncidentResponse:
-    if _is_warehouse_demo(payload):
-        return _build_warehouse_demo_analysis(payload)
-
     old_text = payload.source_context.strip() or "pass"
     new_text = f"{old_text}\n# Replace this placeholder with an approved fix."
     return AnalyzeIncidentResponse(
@@ -583,47 +580,6 @@ def _build_fake_analysis(payload: AnalyzeIncidentRequest) -> AnalyzeIncidentResp
             "Inspect the failing code path around the reported line.",
             "Add a minimal guard that turns the failure into a controlled application error.",
             "Review and approve the generated patch before applying it.",
-        ],
-        diff=_build_unified_diff(payload.repo_relative_path, old_text, new_text),
-        patch=AnalyzePatch(
-            repo_relative_path=payload.repo_relative_path,
-            old_text=old_text,
-            new_text=new_text,
-        ),
-    )
-
-
-def _is_warehouse_demo(payload: AnalyzeIncidentRequest) -> bool:
-    return (
-        payload.repo_relative_path == "apps/target/src/main.py"
-        and "WAREHOUSES[warehouse_id]" in payload.source_context
-    )
-
-
-def _build_warehouse_demo_analysis(payload: AnalyzeIncidentRequest) -> AnalyzeIncidentResponse:
-    old_text = "    warehouse_name = WAREHOUSES[warehouse_id]"
-    new_text = "\n".join(
-        [
-            "    warehouse_name = WAREHOUSES.get(warehouse_id)",
-            "    if warehouse_name is None:",
-            '        raise HTTPException(status_code=409, detail="Order references an unknown warehouse.")',
-        ]
-    )
-    return AnalyzeIncidentResponse(
-        severity="Medium",
-        category="Unhandled exception",
-        cwe="CWE-703",
-        title="Guard missing warehouse lookup in checkout flow",
-        explanation=(
-            "The checkout path dereferences a warehouse_id using direct dictionary indexing. "
-            "When the order references warehouse 999, the lookup raises KeyError and turns "
-            "bad data into a 500 instead of a controlled application error."
-        ),
-        violated_policy=_extract_violated_policy(payload.policy_text),
-        fix_plan=[
-            "Replace direct warehouse indexing with a guarded lookup.",
-            "Return a controlled HTTP error when the warehouse reference is invalid.",
-            "Keep the fix local to checkout without adding dependencies or applying it automatically.",
         ],
         diff=_build_unified_diff(payload.repo_relative_path, old_text, new_text),
         patch=AnalyzePatch(

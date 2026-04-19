@@ -49,7 +49,7 @@ async def test_ide_analyze_returns_fake_response_when_impl_is_unavailable(app, m
     assert response.status_code == 200
     payload = response.json()
     assert payload["severity"] == "Medium"
-    assert payload["patch"]["oldText"] == "    warehouse_name = WAREHOUSES[warehouse_id]"
+    assert payload["patch"]["oldText"] == "warehouse_name = WAREHOUSES[warehouse_id]"
     assert payload["patch"]["repoRelativePath"] == "apps/target/src/main.py"
 
 
@@ -67,12 +67,12 @@ async def test_ide_analyze_uses_demo_fallback_for_empty_body(app, monkeypatch) -
     assert response.status_code == 200
     payload = response.json()
     assert payload["severity"] == "Medium"
-    assert payload["patch"]["oldText"] == "    warehouse_name = WAREHOUSES[warehouse_id]"
+    assert payload["patch"]["oldText"] == "warehouse_name = WAREHOUSES[warehouse_id]"
     assert payload["patch"]["repoRelativePath"] == "apps/target/src/main.py"
 
 
 @pytest.mark.asyncio
-async def test_ide_analyze_fake_response_detects_demo_issue_without_exact_line(app, monkeypatch) -> None:
+async def test_ide_analyze_fake_response_produces_generic_todo_for_any_line(app, monkeypatch) -> None:
     monkeypatch.setenv("SECURE_LOOP_USE_FAKE_CODEX", "1")
     request_body = sample_analysis_request()
     request_body["lineNumber"] = 7
@@ -87,8 +87,10 @@ async def test_ide_analyze_fake_response_detects_demo_issue_without_exact_line(a
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["title"] == "Guard missing warehouse lookup in checkout flow"
-    assert payload["patch"]["oldText"] == "    warehouse_name = WAREHOUSES[warehouse_id]"
+    assert payload["title"] == (
+        f"Review {request_body['exceptionType']} handling in {request_body['repoRelativePath']}"
+    )
+    assert payload["patch"]["oldText"] == "warehouse_name = WAREHOUSES[warehouse_id]"
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,6 @@ from .dep_check import format_dep_scan_for_prompt, run_pip_audit
 from .models import (
     AnalyzeIncidentRequest,
     AnalyzeIncidentResponse,
-    AnalyzePatch,
     DepCheckResult,
 )
 from .prompt_builder import build_codex_prompt, build_pytest_prompt
@@ -166,9 +165,6 @@ def _attach_dep_check(
 
 
 def _build_fallback_response(request: AnalyzeIncidentRequest) -> AnalyzeIncidentResponse:
-    if _looks_like_warehouse_demo(request):
-        return _build_warehouse_demo_response(request)
-
     old_text = request.source_context.strip() or "pass"
     new_text = f"{old_text}\n# TODO: replace with an approved SecureLoop fix."
     patch = build_patch(
@@ -198,75 +194,6 @@ def _build_fallback_response(request: AnalyzeIncidentRequest) -> AnalyzeIncident
         ),
         patch=patch,
     )
-
-
-def _build_warehouse_demo_response(request: AnalyzeIncidentRequest) -> AnalyzeIncidentResponse:
-    old_text = _warehouse_old_text(request.source_context)
-    indent = old_text[: len(old_text) - len(old_text.lstrip())]
-    new_text = "\n".join(
-        [
-            f"{indent}warehouse_name = WAREHOUSES.get(warehouse_id)",
-            f"{indent}if warehouse_name is None:",
-            f'{indent}    raise HTTPException(status_code=409, detail="Order references an unknown warehouse.")',
-        ]
-    )
-    patch = AnalyzePatch(
-        repo_relative_path=request.repo_relative_path,
-        old_text=old_text,
-        new_text=new_text,
-    )
-    return AnalyzeIncidentResponse(
-        severity="Medium",
-        category="Unhandled exception",
-        cwe="CWE-703",
-        title="Guard missing warehouse lookup in checkout flow",
-        explanation=(
-            "The checkout path dereferences a warehouse_id using direct dictionary indexing. "
-            "When the order references warehouse 999, the lookup raises KeyError and turns "
-            "bad data into a 500 instead of a controlled application error."
-        ),
-        violated_policy=_extract_violated_policy(request.policy_text),
-        fix_plan=[
-            "Replace direct warehouse indexing with a guarded lookup.",
-            "Return a controlled HTTP error when the warehouse reference is invalid.",
-            "Keep the fix local to checkout without adding dependencies or applying it automatically.",
-        ],
-        diff=build_unified_diff(
-            repo_relative_path=patch.repo_relative_path,
-            old_text=patch.old_text,
-            new_text=patch.new_text,
-        ),
-        patch=patch,
-    )
-
-
-def _looks_like_warehouse_demo(request: AnalyzeIncidentRequest) -> bool:
-    source_context = request.source_context.lower()
-    incident_text = " ".join(
-        [
-            request.repo_relative_path,
-            str(request.line_number),
-            request.exception_type,
-            request.exception_message,
-            request.title,
-        ]
-    ).lower()
-    return (
-        request.repo_relative_path == "apps/target/src/main.py"
-        and "warehouses[warehouse_id]" in source_context
-    ) or (
-        "warehouse" in incident_text
-        and "warehouses[warehouse_id]" in source_context
-    )
-
-
-def _warehouse_old_text(source_context: str) -> str:
-    for line in source_context.splitlines():
-        if "warehouse_name = WAREHOUSES[warehouse_id]" in line:
-            if line == line.lstrip():
-                return "    warehouse_name = WAREHOUSES[warehouse_id]"
-            return line
-    return "    warehouse_name = WAREHOUSES[warehouse_id]"
 
 
 def _extract_violated_policy(policy_text: str) -> list[str]:
