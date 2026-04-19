@@ -3,16 +3,23 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import inspect
+from importlib import import_module
 import logging
+import os
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Literal
+from typing import Any, AsyncIterator, Callable, Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
 
 from .config import Settings, load_settings
 from .models import (
+    AnalyzeIncidentRequest,
+    AnalyzeIncidentResponse,
+    AnalyzePatch,
     DebugIncidentRequest,
     IncidentFeedResponse,
     IssueAlertWebhook,
@@ -23,6 +30,14 @@ from .storage import IncidentBroker, IncidentStore
 
 
 logger = logging.getLogger("secureloop.agent")
+
+TRUTHY_ENV_VALUES = {"1", "true", "TRUE", "yes", "YES"}
+ANALYZE_MODULE_CANDIDATES = (
+    "src.analysis_service",
+    "src.analysis",
+    "src.ide_analyze",
+    "src.codex_analysis",
+)
 
 
 def create_app(
@@ -147,6 +162,11 @@ def create_app(
             raise HTTPException(status_code=404, detail="Incident not found.")
         return Response(status_code=204)
 
+    @app.post("/ide/analyze", response_model=AnalyzeIncidentResponse)
+    async def analyze_incident(payload: AnalyzeIncidentRequest, request: Request) -> AnalyzeIncidentResponse:
+        _verify_ide_request(request, app.state.settings)
+        return await _resolve_analysis(payload)
+
     @app.post("/debug/incidents", status_code=201)
     async def create_debug_incident(
         payload: DebugIncidentRequest,
@@ -163,6 +183,158 @@ def create_app(
         return JSONResponse(incident.model_dump(mode="json", by_alias=True), status_code=201)
 
     return app
+
+
+async def _resolve_analysis(payload: AnalyzeIncidentRequest) -> AnalyzeIncidentResponse:
+    if _use_fake_codex():
+        return _build_fake_analysis(payload)
+
+    try:
+        analyze_impl = _resolve_analyze_impl()
+    except RuntimeError as exc:
+        logger.exception("Failed to load SecureLoop analysis implementation.")
+        raise HTTPException(
+            status_code=502,
+            detail="SecureLoop analysis implementation could not be loaded.",
+        ) from exc
+
+    if analyze_impl is None:
+        return _build_fake_analysis(payload)
+
+    try:
+        result = analyze_impl(payload)
+        if inspect.isawaitable(result):
+            result = await result
+    except Exception as exc:
+        logger.exception("SecureLoop analysis implementation failed.")
+        raise HTTPException(status_code=502, detail="SecureLoop analysis request failed.") from exc
+
+    try:
+        return AnalyzeIncidentResponse.model_validate(result)
+    except ValidationError as exc:
+        logger.exception("SecureLoop analysis implementation returned invalid data.")
+        raise HTTPException(
+            status_code=502,
+            detail="SecureLoop analysis response was invalid.",
+        ) from exc
+
+
+def _use_fake_codex() -> bool:
+    return os.getenv("SECURE_LOOP_USE_FAKE_CODEX", "0").strip() in TRUTHY_ENV_VALUES
+
+
+def _resolve_analyze_impl() -> Callable[[AnalyzeIncidentRequest], Any] | None:
+    for module_path in ANALYZE_MODULE_CANDIDATES:
+        try:
+            module = import_module(module_path)
+        except ModuleNotFoundError as exc:
+            if exc.name == module_path:
+                continue
+            raise RuntimeError(f"Unable to import {module_path}.") from exc
+        except Exception as exc:
+            raise RuntimeError(f"Unable to import {module_path}.") from exc
+
+        analyze_impl = getattr(module, "analyze_incident", None)
+        if callable(analyze_impl):
+            return analyze_impl
+
+    return None
+
+
+def _build_fake_analysis(payload: AnalyzeIncidentRequest) -> AnalyzeIncidentResponse:
+    if _is_warehouse_demo(payload):
+        return _build_warehouse_demo_analysis(payload)
+
+    old_text = payload.source_context.strip() or "pass"
+    new_text = f"{old_text}\n# Replace this placeholder with an approved fix."
+    return AnalyzeIncidentResponse(
+        severity="Medium",
+        category="Runtime exception",
+        cwe="CWE-703",
+        title=f"Review {payload.exception_type} handling in {payload.repo_relative_path}",
+        explanation=(
+            "SecureLoop is running in deterministic fake mode because no Codex analysis "
+            "implementation is available yet."
+        ),
+        violated_policy=_extract_violated_policy(payload.policy_text),
+        fix_plan=[
+            "Inspect the failing code path around the reported line.",
+            "Add a minimal guard that turns the failure into a controlled application error.",
+            "Review and approve the generated patch before applying it.",
+        ],
+        diff=_build_unified_diff(payload.repo_relative_path, old_text, new_text),
+        patch=AnalyzePatch(
+            repo_relative_path=payload.repo_relative_path,
+            old_text=old_text,
+            new_text=new_text,
+        ),
+    )
+
+
+def _is_warehouse_demo(payload: AnalyzeIncidentRequest) -> bool:
+    return (
+        payload.repo_relative_path == "apps/target/src/main.py"
+        and payload.line_number == 45
+        and "WAREHOUSES[warehouse_id]" in payload.source_context
+    )
+
+
+def _build_warehouse_demo_analysis(payload: AnalyzeIncidentRequest) -> AnalyzeIncidentResponse:
+    old_text = "warehouse_name = WAREHOUSES[warehouse_id]"
+    new_text = "\n".join(
+        [
+            "warehouse_name = WAREHOUSES.get(warehouse_id)",
+            "if warehouse_name is None:",
+            '    raise HTTPException(status_code=409, detail="Order references an unknown warehouse.")',
+        ]
+    )
+    return AnalyzeIncidentResponse(
+        severity="Medium",
+        category="Unhandled exception",
+        cwe="CWE-703",
+        title="Guard missing warehouse lookup in checkout flow",
+        explanation=(
+            "The checkout path dereferences a warehouse_id using direct dictionary indexing. "
+            "When the order references warehouse 999, the lookup raises KeyError and turns "
+            "bad data into a 500 instead of a controlled application error."
+        ),
+        violated_policy=_extract_violated_policy(payload.policy_text),
+        fix_plan=[
+            "Replace direct warehouse indexing with a guarded lookup.",
+            "Return a controlled HTTP error when the warehouse reference is invalid.",
+            "Keep the fix local to checkout without adding dependencies or applying it automatically.",
+        ],
+        diff=_build_unified_diff(payload.repo_relative_path, old_text, new_text),
+        patch=AnalyzePatch(
+            repo_relative_path=payload.repo_relative_path,
+            old_text=old_text,
+            new_text=new_text,
+        ),
+    )
+
+
+def _extract_violated_policy(policy_text: str) -> list[str]:
+    canonical_rule = "Do not expose stack traces or internal exception messages to end users."
+    if canonical_rule in policy_text:
+        return [canonical_rule]
+
+    bullet_lines = [
+        line.lstrip("- ").strip()
+        for line in policy_text.splitlines()
+        if line.lstrip().startswith("-")
+    ]
+    return bullet_lines[:1] or [canonical_rule]
+
+
+def _build_unified_diff(repo_relative_path: str, old_text: str, new_text: str) -> str:
+    diff_lines = [
+        f"--- a/{repo_relative_path}",
+        f"+++ b/{repo_relative_path}",
+        "@@",
+    ]
+    diff_lines.extend(f"-{line}" for line in old_text.splitlines() or [old_text])
+    diff_lines.extend(f"+{line}" for line in new_text.splitlines() or [new_text])
+    return "\n".join(diff_lines)
 
 
 def _verify_sentry_request(request: Request, raw_body: bytes, settings: Settings) -> None:

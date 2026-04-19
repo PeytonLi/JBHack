@@ -73,6 +73,35 @@ class IncidentFeedResponse(CamelModel):
     incidents: list[IncidentRecord]
 
 
+class AnalyzeIncidentRequest(CamelModel):
+    incident_id: str
+    repo_relative_path: str
+    line_number: int
+    exception_type: str
+    exception_message: str
+    title: str
+    source_context: str
+    policy_text: str
+
+
+class AnalyzePatch(CamelModel):
+    repo_relative_path: str
+    old_text: str
+    new_text: str
+
+
+class AnalyzeIncidentResponse(CamelModel):
+    severity: Literal["Critical", "High", "Medium", "Low"]
+    category: str
+    cwe: str
+    title: str
+    explanation: str
+    violated_policy: list[str]
+    fix_plan: list[str]
+    diff: str
+    patch: AnalyzePatch
+
+
 class DebugIncidentRequest(CamelModel):
     title: str = "Local SecureLoop test incident"
     exception_type: str = "KeyError"
