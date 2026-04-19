@@ -214,15 +214,27 @@ async def _run_autopilot_locked(app: FastAPI, incident_id: str) -> None:
         event_type="pipeline.step",
         payload={"step": "open_pr"},
     )
-    pr_result = await _open_pr_async(
-        token=settings.github_token or "",
-        repo=settings.github_repo or "",
-        incident_id=incident_id,
-        analysis=analysis,
-        relative_path=incident.repo_relative_path,
-        updated_file_content=updated_content,
-        extra_files=extra_files,
-    )
+    try:
+        pr_result = await _open_pr_async(
+            token=settings.github_token or "",
+            repo=settings.github_repo or "",
+            incident_id=incident_id,
+            analysis=analysis,
+            relative_path=incident.repo_relative_path,
+            updated_file_content=updated_content,
+            extra_files=extra_files,
+        )
+    except Exception as exc:  # noqa: BLE001 - PyGithub raises a zoo of types
+        logger.exception("autopilot: open_pr_failed; falling back to local artifacts.")
+        from .main import _write_local_artifacts
+
+        pr_result = _write_local_artifacts(
+            incident_id=incident_id,
+            analysis=analysis,
+            relative_path=incident.repo_relative_path,
+            updated_file_content=updated_content,
+            error=str(exc),
+        )
     await broker.publish_pipeline(
         incident_id=incident_id,
         event_type="pipeline.completed",

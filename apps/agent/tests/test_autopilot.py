@@ -218,6 +218,46 @@ async def test_run_autopilot_happy_path(app_and_patches) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_autopilot_falls_back_to_local_artifacts_when_pr_open_fails(
+    app_and_patches, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = app_and_patches
+    await app.state.store.initialize()
+    await app.state.store.put_if_absent(_incident())
+
+    import src.main as main_module
+
+    monkeypatch.setattr(main_module, "_PR_ARTIFACTS_ROOT", tmp_path / "out")
+
+    async def fake_open_pr_raises(**kwargs) -> PullRequestResult:
+        raise RuntimeError("github boom")
+
+    monkeypatch.setattr(autopilot_module, "_open_pr_async", fake_open_pr_raises)
+
+    events: list[dict] = []
+
+    async def capture() -> None:
+        events.extend(await _collect_pipeline_events(app.state.broker, deadline=0.3))
+
+    consumer = asyncio.create_task(capture())
+    await asyncio.sleep(0)
+    await run_autopilot(app, "inc-1")
+    await consumer
+
+    assert events[-1]["type"] == "pipeline.completed"
+    payload = events[-1]["pipeline"]
+    assert payload["prUrl"] is None
+    assert payload["prNumber"] is None
+    assert payload["branch"] is None
+    assert payload["error"] == "github boom"
+    artifact_dir = Path(payload["localArtifactPath"])
+    assert str(tmp_path) in str(artifact_dir)
+    assert (artifact_dir / "fix.patch").exists()
+    assert (artifact_dir / "COE.md").exists()
+    assert (artifact_dir / "meta.json").exists()
+
+
+@pytest.mark.asyncio
 async def test_run_autopilot_missing_source_metadata(app_and_patches) -> None:
     app = app_and_patches
     await app.state.store.initialize()
