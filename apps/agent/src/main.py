@@ -34,6 +34,9 @@ from .models import (
     InternalErrorWebhook,
     InternalIssueWebhook,
     IssueAlertWebhook,
+    NavigateRequest,
+    NavigateRequestBody,
+    NavigateResponse,
     normalize_internal_error_event,
     normalize_internal_issue_event,
     normalize_sentry_event,
@@ -52,6 +55,7 @@ ANALYZE_MODULE_CANDIDATES = (
     "src.codex_analysis",
 )
 _SUPPORTED_RESOURCES = {"event_alert", "issue", "error"}
+_DASHBOARD_FORWARDED_TYPES = {"incident.created", "incident.updated"}
 _DEFAULT_DASHBOARD_ORIGIN = "http://localhost:3000"
 _PR_ARTIFACTS_ROOT = Path(__file__).resolve().parents[1] / "out"
 
@@ -139,8 +143,12 @@ def create_app(
                     try:
                         payload = await asyncio.wait_for(queue.get(), timeout=15.0)
                         envelope = json.loads(payload)
-                        inner_incident = envelope["incident"]["incident"]
-                        yield f"data: {json.dumps(inner_incident)}\n\n"
+                        envelope_type = envelope.get("type", "incident.created")
+                        if envelope_type == "ide.navigate":
+                            yield f"event: ide.navigate\ndata: {json.dumps(envelope['navigate'])}\n\n"
+                        else:
+                            inner_incident = envelope["incident"]["incident"]
+                            yield f"data: {json.dumps(inner_incident)}\n\n"
                     except TimeoutError:
                         yield ": keepalive\n\n"
 
@@ -167,6 +175,8 @@ def create_app(
                         payload = await asyncio.wait_for(queue.get(), timeout=15.0)
                         envelope = json.loads(payload)
                         event_name = envelope.get("type", "incident.created")
+                        if event_name not in _DASHBOARD_FORWARDED_TYPES:
+                            continue
                         body = json.dumps(envelope["incident"])
                         yield f"event: {event_name}\ndata: {body}\n\n"
                     except TimeoutError:
@@ -195,6 +205,45 @@ def create_app(
             headers={
                 "Access-Control-Allow-Origin": _dashboard_origin(app.state.settings),
                 "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+            },
+        )
+
+    @app.post("/ide/navigate", response_model=NavigateResponse)
+    async def ide_navigate(
+        request: Request,
+        payload: NavigateRequestBody = Body(...),
+    ) -> JSONResponse:
+        dashboard_origin = _dashboard_origin(app.state.settings)
+        record = await app.state.store.get_record(payload.incident_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Incident not found.")
+        inc = record.incident
+        navigate = NavigateRequest(
+            incident_id=inc.incident_id,
+            repo_relative_path=inc.repo_relative_path,
+            original_frame_path=inc.original_frame_path,
+            line_number=inc.line_number,
+            function_name=inc.function_name,
+        )
+        subscribers = await app.state.broker.publish_navigate(navigate)
+        body = NavigateResponse(
+            delivered=subscribers > 0,
+            subscribers=subscribers,
+            incident_id=inc.incident_id,
+        )
+        return JSONResponse(
+            body.model_dump(mode="json", by_alias=True),
+            headers={"Access-Control-Allow-Origin": dashboard_origin},
+        )
+
+    @app.options("/ide/navigate")
+    async def ide_navigate_preflight() -> Response:
+        return Response(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": _dashboard_origin(app.state.settings),
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
                 "Access-Control-Allow-Headers": "*",
             },
         )

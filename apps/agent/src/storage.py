@@ -13,6 +13,7 @@ from .models import (
     AnalyzeIncidentResponse,
     IncidentRecord,
     IncidentSummary,
+    NavigateRequest,
     NormalizedIncident,
 )
 
@@ -349,7 +350,7 @@ class IncidentBroker:
         record: IncidentRecord,
         *,
         event_type: Literal["incident.created", "incident.updated"] = "incident.created",
-    ) -> None:
+    ) -> int:
         envelope = {
             "type": event_type,
             "incident": json.loads(record.model_dump_json(by_alias=True)),
@@ -359,6 +360,19 @@ class IncidentBroker:
             subscribers = list(self._subscribers)
         for queue in subscribers:
             queue.put_nowait(payload)
+        return len(subscribers)
+
+    async def publish_navigate(self, navigate: NavigateRequest) -> int:
+        envelope = {
+            "type": "ide.navigate",
+            "navigate": json.loads(navigate.model_dump_json(by_alias=True)),
+        }
+        payload = json.dumps(envelope)
+        async with self._lock:
+            subscribers = list(self._subscribers)
+        for queue in subscribers:
+            queue.put_nowait(payload)
+        return len(subscribers)
 
 
 def _hydrate_sentry_columns(

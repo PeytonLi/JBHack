@@ -122,6 +122,64 @@ async def test_health_reports_demo_mode(app) -> None:
         assert payload["reviewedIncidentCount"] == 0
 
 
+@pytest.mark.asyncio
+async def test_navigate_endpoint_404_for_unknown_incident(app) -> None:
+    await app.state.store.initialize()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/ide/navigate",
+            json={"incidentId": "does-not-exist"},
+        )
+        assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_navigate_endpoint_returns_zero_subscribers_when_no_plugin_connected(
+    app,
+) -> None:
+    await app.state.store.initialize()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        seed_response = await client.post(
+            "/debug/incidents",
+            json={"repoRelativePath": "apps/target/src/main.py", "lineNumber": 45},
+            headers={"authorization": "Bearer ide-token"},
+        )
+        assert seed_response.status_code == 201
+        incident_id = seed_response.json()["incidentId"]
+
+        response = await client.post(
+            "/ide/navigate",
+            json={"incidentId": incident_id},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload == {
+            "delivered": False,
+            "subscribers": 0,
+            "incidentId": incident_id,
+        }
+        assert (
+            response.headers.get("access-control-allow-origin")
+            == "http://localhost:3000"
+        )
+
+
+@pytest.mark.asyncio
+async def test_navigate_endpoint_cors_preflight(app) -> None:
+    await app.state.store.initialize()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.options("/ide/navigate")
+        assert response.status_code == 204
+        assert (
+            response.headers.get("access-control-allow-origin")
+            == "http://localhost:3000"
+        )
+        assert "POST" in response.headers.get("access-control-allow-methods", "")
+
+
 def test_normalize_sentry_event_prefers_in_app_frame() -> None:
     incident = normalize_sentry_event(
         sample_issue_alert_payload_model(),

@@ -191,6 +191,24 @@ class DebugIncidentRequest(CamelModel):
         )
 
 
+class NavigateRequest(CamelModel):
+    incident_id: str
+    repo_relative_path: str | None = None
+    original_frame_path: str | None = None
+    line_number: int | None = None
+    function_name: str | None = None
+
+
+class NavigateRequestBody(CamelModel):
+    incident_id: str
+
+
+class NavigateResponse(CamelModel):
+    delivered: bool
+    subscribers: int
+    incident_id: str
+
+
 def normalize_sentry_event(
     webhook: IssueAlertWebhook,
     event_payload: dict[str, Any],
