@@ -14,13 +14,21 @@ from typing import Any, AsyncIterator, Callable, Literal
 import httpx
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+from pathlib import Path
 from pydantic import ValidationError
 
 from .config import Settings, load_settings
+from .github_client import (
+    GitHubClient,
+    PullRequestResult,
+    build_commit_message,
+    build_pr_body,
+)
 from .models import (
     AnalyzeIncidentRequest,
     AnalyzeIncidentResponse,
     AnalyzePatch,
+    CamelModel,
     DebugIncidentRequest,
     IncidentFeedResponse,
     InternalErrorWebhook,
@@ -45,6 +53,12 @@ ANALYZE_MODULE_CANDIDATES = (
 )
 _SUPPORTED_RESOURCES = {"event_alert", "issue", "error"}
 _DEFAULT_DASHBOARD_ORIGIN = "http://localhost:3000"
+_PR_ARTIFACTS_ROOT = Path(__file__).resolve().parents[1] / "out"
+
+
+class OpenPrRequest(CamelModel):
+    updated_file_content: str
+    relative_path: str | None = None
 
 
 def create_app(
@@ -210,7 +224,54 @@ def create_app(
         if payload is None:
             logger.warning("Received empty /ide/analyze body; using deterministic demo analysis payload.")
             payload = _build_demo_analysis_request()
-        return await _resolve_analysis(payload)
+        analysis = await _resolve_analysis(payload)
+        try:
+            await app.state.store.put_analysis(payload.incident_id, analysis)
+        except Exception:
+            logger.exception("Failed to persist analysis for incident %s.", payload.incident_id)
+        return analysis
+
+    @app.post("/ide/events/{incident_id}/open-pr")
+    async def open_pr(
+        incident_id: str,
+        request: Request,
+        payload: OpenPrRequest = Body(...),
+    ) -> PullRequestResult:
+        _verify_ide_request(request, app.state.settings)
+        analysis = await app.state.store.get_analysis(incident_id)
+        if analysis is None:
+            raise HTTPException(
+                status_code=404,
+                detail="no analysis stored for incident",
+            )
+        relative_path = payload.relative_path or analysis.patch.repo_relative_path
+        token = os.environ.get("GITHUB_TOKEN")
+        repo = os.environ.get("GITHUB_REPO")
+        if not token or not repo:
+            return _write_local_artifacts(
+                incident_id=incident_id,
+                analysis=analysis,
+                relative_path=relative_path,
+                updated_file_content=payload.updated_file_content,
+                error="GITHUB_TOKEN or GITHUB_REPO not configured.",
+            )
+        try:
+            client = GitHubClient(token, repo)
+            return client.open_pr_for_incident(
+                incident_id=incident_id,
+                analysis=analysis,
+                relative_path=relative_path,
+                updated_file_content=payload.updated_file_content,
+            )
+        except Exception as exc:
+            logger.exception("PR creation failed; writing local artifacts.")
+            return _write_local_artifacts(
+                incident_id=incident_id,
+                analysis=analysis,
+                relative_path=relative_path,
+                updated_file_content=payload.updated_file_content,
+                error=str(exc),
+            )
 
     @app.post("/debug/incidents", status_code=201)
     async def create_debug_incident(
@@ -542,6 +603,46 @@ def _is_valid_signature(raw_body: bytes, header_value: str | None, secret: str) 
 
     digest = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(digest, header_value)
+
+
+def _write_local_artifacts(
+    *,
+    incident_id: str,
+    analysis: AnalyzeIncidentResponse,
+    relative_path: str,
+    updated_file_content: str,
+    error: str | None = None,
+) -> PullRequestResult:
+    out_dir = _PR_ARTIFACTS_ROOT / f"pr-{incident_id}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    patch_path = out_dir / "fix.patch"
+    coe_path = out_dir / "COE.md"
+    meta_path = out_dir / "meta.json"
+    patch_path.write_text(analysis.diff, encoding="utf-8")
+    coe_path.write_text(
+        build_pr_body(incident_id, analysis),
+        encoding="utf-8",
+    )
+    meta_path.write_text(
+        json.dumps(
+            {
+                "incidentId": incident_id,
+                "relativePath": relative_path,
+                "commitMessage": build_commit_message(analysis, relative_path),
+                "updatedFileBytes": len(updated_file_content.encode("utf-8")),
+                "error": error,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return PullRequestResult(
+        pr_url=None,
+        pr_number=None,
+        branch=None,
+        local_artifact_path=str(out_dir),
+        error=error,
+    )
 
 
 app = create_app()

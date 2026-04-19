@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+import logging
+import re
+from datetime import UTC, datetime
+
+from github import Github, GithubException, UnknownObjectException
+
+from .models import AnalyzeIncidentResponse, CamelModel
+
+
+logger = logging.getLogger("secureloop.agent.github_client")
+
+
+class PullRequestResult(CamelModel):
+    pr_url: str | None = None
+    pr_number: int | None = None
+    branch: str | None = None
+    local_artifact_path: str | None = None
+    error: str | None = None
+
+
+class GitHubClient:
+    def __init__(self, token: str, repo: str) -> None:
+        self._gh = Github(token)
+        self._repo = self._gh.get_repo(repo)
+
+    @property
+    def default_branch(self) -> str:
+        return self._repo.default_branch or "main"
+
+    def open_pr_for_incident(
+        self,
+        incident_id: str,
+        analysis: AnalyzeIncidentResponse,
+        relative_path: str,
+        updated_file_content: str,
+        base_branch: str | None = None,
+    ) -> PullRequestResult:
+        base = base_branch or self.default_branch
+        branch = _branch_name(incident_id, analysis)
+        base_ref = self._repo.get_branch(base)
+        branch = self._create_branch(branch, base_ref.commit.sha)
+
+        commit_message = build_commit_message(analysis, relative_path)
+        existing = self._get_file_sha(relative_path, branch)
+        if existing is None:
+            self._repo.create_file(
+                path=relative_path,
+                message=commit_message,
+                content=updated_file_content,
+                branch=branch,
+            )
+        else:
+            self._repo.update_file(
+                path=relative_path,
+                message=commit_message,
+                content=updated_file_content,
+                sha=existing,
+                branch=branch,
+            )
+
+        pr = self._repo.create_pull(
+            title=commit_message,
+            body=build_pr_body(incident_id, analysis),
+            head=branch,
+            base=base,
+        )
+        return PullRequestResult(
+            pr_url=pr.html_url,
+            pr_number=pr.number,
+            branch=branch,
+        )
+
+    def _create_branch(self, branch: str, sha: str) -> str:
+        ref = f"refs/heads/{branch}"
+        try:
+            self._repo.create_git_ref(ref=ref, sha=sha)
+            return branch
+        except GithubException as exc:
+            if exc.status != 422:
+                raise
+            suffix = datetime.now(UTC).strftime("%H%M%S")
+            alternate = f"{branch}-{suffix}"
+            self._repo.create_git_ref(ref=f"refs/heads/{alternate}", sha=sha)
+            return alternate
+
+    def _get_file_sha(self, path: str, branch: str) -> str | None:
+        try:
+            contents = self._repo.get_contents(path, ref=branch)
+        except UnknownObjectException:
+            return None
+        except GithubException as exc:
+            if exc.status == 404:
+                return None
+            raise
+        if isinstance(contents, list):
+            return None
+        return contents.sha
+
+
+def _slugify(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
+    return cleaned or "fix"
+
+
+def _branch_name(incident_id: str, analysis: AnalyzeIncidentResponse) -> str:
+    identifier = analysis.cwe or analysis.category or "fix"
+    return f"secureloop/{incident_id[:8]}-{_slugify(identifier)}"
+
+
+def build_commit_message(analysis: AnalyzeIncidentResponse, relative_path: str) -> str:
+    cwe = analysis.cwe or "security"
+    category = analysis.category or "fix"
+    return f"fix(security): {cwe} {category} in {relative_path}"
+
+
+def build_pr_body(incident_id: str, analysis: AnalyzeIncidentResponse) -> str:
+    lines: list[str] = []
+    lines.append(f"**Severity:** {analysis.severity}")
+    lines.append(f"**CWE:** {analysis.cwe}")
+    lines.append(f"**Category:** {analysis.category}")
+    lines.append("")
+    lines.append("## Attack scenario")
+    lines.append(analysis.explanation.strip() or "(no explanation provided)")
+    lines.append("")
+    lines.append("## Fix plan")
+    if analysis.fix_plan:
+        for idx, step in enumerate(analysis.fix_plan, start=1):
+            lines.append(f"{idx}. {step}")
+    else:
+        lines.append("1. (no fix plan)")
+    lines.append("")
+    lines.append("## Dependency scan")
+    dep = analysis.dep_check
+    if dep is None:
+        lines.append("Dependency scan unavailable.")
+    elif not dep.vulnerabilities:
+        lines.append(f"{dep.scanner}: no vulnerable dependencies detected.")
+    else:
+        lines.append(f"{dep.scanner}: {len(dep.vulnerabilities)} vulnerable package(s).")
+        for v in dep.vulnerabilities:
+            fixed = f" (fix: {v.fixed_version})" if v.fixed_version else ""
+            lines.append(f"- [{v.id}] {v.package}=={v.version}{fixed}: {v.summary}")
+    lines.append("")
+    lines.append(f"Incident ID: `{incident_id}`")
+    lines.append("")
+    lines.append("_Generated by SecureLoop_")
+    return "\n".join(lines)
