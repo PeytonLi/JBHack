@@ -34,6 +34,11 @@ def _sample_analysis() -> AnalyzeIncidentResponse:
             new_text="new",
         ),
         reasoning_steps=["Observed KeyError", "Chose guarded lookup"],
+        root_cause="ROOT_CAUSE_SENTINEL",
+        fix_summary="FIX_SUMMARY_SENTINEL",
+        prevention="PREVENTION_SENTINEL",
+        impact="IMPACT_SENTINEL",
+        severity_rationale="SEVERITY_RATIONALE_SENTINEL",
         dep_check=DepCheckResult(
             scanner="pip-audit",
             vulnerabilities=[
@@ -64,6 +69,53 @@ def test_build_pr_body_includes_sections() -> None:
     assert "Guard the lookup." in body
     assert "PYSEC-2018-28" in body
     assert "`incident-1`" in body
+
+    for heading in (
+        "## Attack scenario",
+        "## Root cause",
+        "## The fix",
+        "## Fix plan",
+        "## Impact",
+        "## How to prevent this",
+        "## Severity rationale",
+        "## Dependency scan",
+    ):
+        assert heading in body
+
+    assert "ROOT_CAUSE_SENTINEL" in body
+    assert "FIX_SUMMARY_SENTINEL" in body
+    assert "PREVENTION_SENTINEL" in body
+    assert "IMPACT_SENTINEL" in body
+    assert "SEVERITY_RATIONALE_SENTINEL" in body
+
+    idx = {h: body.index(h) for h in (
+        "## Attack scenario", "## Root cause", "## The fix",
+        "## Fix plan", "## Impact", "## How to prevent this",
+        "## Severity rationale", "## Dependency scan",
+    )}
+    ordered = sorted(idx, key=idx.get)
+    assert ordered == [
+        "## Attack scenario",
+        "## Root cause",
+        "## The fix",
+        "## Fix plan",
+        "## Impact",
+        "## How to prevent this",
+        "## Severity rationale",
+        "## Dependency scan",
+    ]
+
+
+def test_build_pr_body_renders_not_provided_for_empty_fields() -> None:
+    analysis = _sample_analysis().model_copy(update={
+        "root_cause": "",
+        "fix_summary": "   ",
+        "prevention": "",
+        "impact": "",
+        "severity_rationale": "",
+    })
+    body = build_pr_body("incident-1", analysis)
+    assert body.count("_Not provided._") >= 5
 
 
 @pytest.fixture

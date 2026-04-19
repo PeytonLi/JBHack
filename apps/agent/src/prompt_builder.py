@@ -45,6 +45,11 @@ ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
                 "minItems": 3,
                 "maxItems": 6,
             },
+            "rootCause": {"type": "string"},
+            "fixSummary": {"type": "string"},
+            "prevention": {"type": "string"},
+            "impact": {"type": "string"},
+            "severityRationale": {"type": "string"},
         },
         "required": [
             "severity",
@@ -57,6 +62,11 @@ ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
             "diff",
             "patch",
             "reasoningSteps",
+            "rootCause",
+            "fixSummary",
+            "prevention",
+            "impact",
+            "severityRationale",
         ],
     },
 }
@@ -81,6 +91,11 @@ Rules:
 - The diff must match patch.oldText and patch.newText.
 - Do not suggest writing files, running git, or applying changes automatically.
 - Keep the fix local and avoid new dependencies.
+- rootCause: 1–3 sentences describing the underlying cause of the failure — what assumption was violated, not what the symptom was.
+- fixSummary: one paragraph describing what the patch does and why it resolves the root cause. Should stand alone without reading the diff.
+- prevention: concrete, repo-local recommendations to prevent recurrence (lint rule, test coverage, code review checkpoint, type hint, etc.). Do not recommend new dependencies.
+- impact: real-world impact — what a user or system experienced when this bug fired, and what data or security boundary was at risk. Do not exaggerate or minimize.
+- severityRationale: 1–2 sentences justifying the chosen severity against the impact (exploitability × blast radius × data sensitivity).
 
 <LOCAL_SECURITY_POLICY>
 {policy_text}

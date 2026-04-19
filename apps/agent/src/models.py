@@ -154,6 +154,11 @@ class AnalyzeIncidentResponse(CamelModel):
     diff: str
     patch: AnalyzePatch
     reasoning_steps: list[str] = Field(default_factory=list, max_length=8)
+    root_cause: str = ""
+    fix_summary: str = ""
+    prevention: str = ""
+    impact: str = ""
+    severity_rationale: str = ""
     dep_check: DepCheckResult | None = None
 
 

@@ -32,6 +32,9 @@ from .validator import (
 logger = logging.getLogger("secureloop.agent.codex_analysis")
 
 
+FALLBACK_PLACEHOLDER = "Automated analysis unavailable — manual review required."
+
+
 class SandboxTestGenerationError(RuntimeError):
     pass
 
@@ -227,6 +230,11 @@ def _build_fallback_response(request: AnalyzeIncidentRequest) -> AnalyzeIncident
             new_text=patch.new_text,
         ),
         patch=patch,
+        root_cause=FALLBACK_PLACEHOLDER,
+        fix_summary=FALLBACK_PLACEHOLDER,
+        prevention=FALLBACK_PLACEHOLDER,
+        impact=FALLBACK_PLACEHOLDER,
+        severity_rationale=FALLBACK_PLACEHOLDER,
     )
 
 

@@ -51,6 +51,11 @@ data class AnalyzeIncidentResponse(
     val diff: String,
     val patch: AnalyzePatch,
     val reasoningSteps: List<String> = emptyList(),
+    val rootCause: String = "",
+    val fixSummary: String = "",
+    val prevention: String = "",
+    val impact: String = "",
+    val severityRationale: String = "",
     val depCheck: DepCheckResult? = null,
 )
 

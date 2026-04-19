@@ -177,15 +177,23 @@ def build_commit_message(analysis: AnalyzeIncidentResponse, relative_path: str) 
     return f"fix(security): {cwe} {category} in {relative_path}"
 
 
+def _render_section(lines: list[str], heading: str, value: str) -> None:
+    lines.append(heading)
+    lines.append(value.strip() or "_Not provided._")
+    lines.append("")
+
+
 def build_pr_body(incident_id: str, analysis: AnalyzeIncidentResponse) -> str:
     lines: list[str] = []
     lines.append(f"**Severity:** {analysis.severity}")
     lines.append(f"**CWE:** {analysis.cwe}")
     lines.append(f"**Category:** {analysis.category}")
     lines.append("")
-    lines.append("## Attack scenario")
-    lines.append(analysis.explanation.strip() or "(no explanation provided)")
-    lines.append("")
+
+    _render_section(lines, "## Attack scenario", analysis.explanation or "(no explanation provided)")
+    _render_section(lines, "## Root cause", analysis.root_cause)
+    _render_section(lines, "## The fix", analysis.fix_summary)
+
     lines.append("## Fix plan")
     if analysis.fix_plan:
         for idx, step in enumerate(analysis.fix_plan, start=1):
@@ -193,6 +201,11 @@ def build_pr_body(incident_id: str, analysis: AnalyzeIncidentResponse) -> str:
     else:
         lines.append("1. (no fix plan)")
     lines.append("")
+
+    _render_section(lines, "## Impact", analysis.impact)
+    _render_section(lines, "## How to prevent this", analysis.prevention)
+    _render_section(lines, "## Severity rationale", analysis.severity_rationale)
+
     lines.append("## Dependency scan")
     dep = analysis.dep_check
     if dep is None:

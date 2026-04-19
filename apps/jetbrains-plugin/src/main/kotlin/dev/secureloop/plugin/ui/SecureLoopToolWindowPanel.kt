@@ -465,9 +465,11 @@ class SecureLoopToolWindowPanel(
             appendLine("Category: ${analysis.category}")
             appendLine("CWE: ${analysis.cwe}")
             appendLine("Title: ${analysis.title}")
-            appendLine()
-            appendLine("Explanation:")
-            appendLine(analysis.explanation)
+
+            appendNarrativeSection("Explanation", analysis.explanation)
+            appendNarrativeSection("Root cause", analysis.rootCause)
+            appendNarrativeSection("The fix", analysis.fixSummary)
+
             appendLine()
             appendLine("Violated policy:")
             analysis.violatedPolicy.forEach { rule ->
@@ -478,6 +480,11 @@ class SecureLoopToolWindowPanel(
             analysis.fixPlan.forEachIndexed { index, step ->
                 appendLine("${index + 1}. $step")
             }
+
+            appendNarrativeSection("Impact", analysis.impact)
+            appendNarrativeSection("How to prevent this", analysis.prevention)
+            appendNarrativeSection("Severity rationale", analysis.severityRationale)
+
             if (analysis.reasoningSteps.isNotEmpty()) {
                 appendLine()
                 appendLine("Reasoning steps:")
@@ -505,6 +512,12 @@ class SecureLoopToolWindowPanel(
             appendLine("Diff:")
             appendLine(analysis.diff)
         }
+    }
+
+    private fun StringBuilder.appendNarrativeSection(label: String, value: String) {
+        appendLine()
+        appendLine("$label:")
+        appendLine(value.ifBlank { "—" })
     }
 
     private class IncidentCellRenderer : ColoredListCellRenderer<IncidentPresentation>() {

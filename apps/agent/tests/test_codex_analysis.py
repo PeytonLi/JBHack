@@ -27,6 +27,13 @@ async def test_codex_analysis_returns_demo_fallback_without_api_key(monkeypatch)
     assert response.patch.old_text == request.source_context.strip()
     assert "# TODO: replace with an approved SecureLoop fix." in response.patch.new_text
 
+    placeholder = "Automated analysis unavailable — manual review required."
+    assert response.root_cause == placeholder
+    assert response.fix_summary == placeholder
+    assert response.prevention == placeholder
+    assert response.impact == placeholder
+    assert response.severity_rationale == placeholder
+
 
 @pytest.mark.asyncio
 async def test_codex_analysis_respects_fake_mode_even_with_api_key(monkeypatch) -> None:
@@ -149,6 +156,11 @@ def _build_codex_payload(*, old_text: str, new_text: str) -> str:
             "Identify unhandled KeyError.",
             "Propose guarded replacement.",
         ],
+        "rootCause": "Warehouse dict lookup assumed every incoming id existed in WAREHOUSES.",
+        "fixSummary": "Guard the lookup and return a controlled 404 instead of raising KeyError.",
+        "prevention": "Add a unit test that exercises checkout with an unknown warehouse_id.",
+        "impact": "Users submitting an unknown warehouse_id got a 500 with a stack trace.",
+        "severityRationale": "Triggerable from an unauthenticated request, but no data leak beyond the stack trace — Medium.",
     }
     return json.dumps(payload)
 
@@ -222,3 +234,4 @@ async def test_analyze_incident_falls_back_when_retry_also_fails(monkeypatch) ->
     assert mock_call.await_count == 2
     assert "# TODO: replace with an approved SecureLoop fix." in response.patch.new_text
     assert response.patch.old_text == request.source_context.strip()
+    assert response.root_cause == "Automated analysis unavailable — manual review required."
