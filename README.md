@@ -1,105 +1,126 @@
-# SecureLoop (JBHack)
+# SecureLoop
 
-SecureLoop turns a production-style alert into an IDE-native security workflow. This repo currently implements the ingress and review slice of the hackathon demo: a broken target service, a local companion agent, a JetBrains plugin, and a dashboard over the local incident queue.
+SecureLoop is a JetBrains-native security loop for catching risky code before production, walking the developer through analysis and remediation in the IDE, and using Sentry only as the last-resort safety net for issues that still escape.
 
-## Repo Layout
+## What It Does
 
-- `apps/target`: intentionally broken FastAPI service
-- `apps/agent`: companion service that receives Sentry alerts and streams normalized incidents to the IDE
-- `apps/dashboard`: Next.js dashboard for local incident queue visibility and review history
-- `apps/jetbrains-plugin`: IntelliJ Platform plugin for incident surfacing and line highlighting
-- `security-policy.md`: repo-local security constraints used by the SecureLoop flow
+- surfaces incidents in the `SecureLoop` tool window
+- scans the active editor before commit with `Scan Current File`
+- highlights the affected line in IntelliJ IDEA or PyCharm
+- runs a local demo incident path for production-feedback walkthroughs
+- sends the current file or selected incident to `/ide/analyze` for structured Codex analysis
+- renders the analysis in the plugin, including fix plan and patch
+- requires a human gate: `Approve Fix` or `Reject`
+- applies the approved patch locally in the IDE
+- marks incidents reviewed so the same issue does not keep replaying
 
-## Quick Start For New Users
+## Demo Path
 
-This is the shortest path for someone new to the project to see the plugin work without touching tokens or curl commands.
+This is the shortest path to a visible demo.
 
-1. Install dependencies:
+1. Install dependencies.
 
 ```bash
 pnpm install
 pnpm run install:python
 ```
 
-2. Create a local environment file:
+2. Create a local environment file.
 
 ```bash
 cp .env.example .env
 ```
 
-3. Enable demo mode in `.env`:
+3. Enable demo mode in `.env`. `SECURE_LOOP_USE_FAKE_CODEX=1` keeps the live demo deterministic; set it to `0` when you want the agent to call OpenAI with `OPENAI_API_KEY`.
 
 ```dotenv
 SECURE_LOOP_ALLOW_DEBUG_ENDPOINTS=1
+SECURE_LOOP_USE_FAKE_CODEX=1
 ```
 
-4. Start the target service, agent, and dashboard:
+4. Start the local services.
 
 ```bash
 pnpm dev
 ```
 
 5. Open `apps/jetbrains-plugin` as a Gradle project in IntelliJ IDEA or PyCharm.
-6. Run the `runIde` Gradle task.
-7. In the sandbox IDE, open the JBHack repo root.
+6. Run the `runIde` task.
+7. Open the JBHack repo root inside the sandbox IDE.
 8. Open the `SecureLoop` tool window.
-9. Click `Run Demo`.
+9. Open `apps/target/src/main.py`.
+10. Click `Scan Current File`.
+11. Review the generated analysis, then click `Approve Fix` or `Reject`.
+12. Optional: click `Run Demo` to show the same loop from a Sentry-shaped production alert.
 
 Expected result:
 
-- the tool window reports `Demo ready`
-- a sample incident appears in the incident list
-- `apps/target/src/main.py` opens automatically when the window is active
-- the failing line is highlighted in the editor
-- the dashboard at `http://127.0.0.1:3000` shows the incident as `open`
-- clicking `Mark Reviewed` in the plugin moves the incident into reviewed history
+- a `Pre-Commit Scan` item appears immediately in the tool window
+- the analysis panel shows severity, category, policy context, fix plan, diff, and patch
+- `Approve Fix` applies the local patch in the editor
+- `Reject` discards the suggestion without changing files
+- `Run Demo` still loads a Sentry-shaped incident and highlights `apps/target/src/main.py`
+- `Mark Reviewed` clears the incident from the replay queue
 
-## Real Webhook Flow
+## Architecture
 
-After demo mode works, you can switch to a real signed Sentry flow.
+- `apps/jetbrains-plugin`: IDE plugin, current-file scan, line highlighting, analysis rendering, approve/reject gate, local patch apply
+- `apps/agent`: FastAPI companion service with `/sentry/webhook`, `/ide/events/stream`, `/ide/analyze`, and review endpoints
+- `apps/target`: intentionally broken demo service used to produce the incident
+- `apps/dashboard`: optional queue visibility for the local incident feed
 
-Set these values in `.env`:
+Backend analysis flow today:
 
-- `SENTRY_DSN`
-- `SENTRY_AUTH_TOKEN`
-- `SENTRY_WEBHOOK_SECRET`
+1. plugin collects active-file or incident file context and the repo security policy
+2. plugin POSTs to `/ide/analyze`
+3. agent resolves the analysis implementation
+4. Codex-backed analysis runs when available
+5. validator checks the response
+6. deterministic fallback returns if Codex is unavailable or invalid
 
-Then configure Sentry to send an issue alert webhook to:
+## Setup
 
-```text
-POST http://127.0.0.1:8001/sentry/webhook
-```
-
-If Sentry is remote, expose the local agent with a tunnel first.
-
-## Root Scripts
+Root scripts:
 
 - `pnpm dev`: run target, agent, and dashboard concurrently
 - `pnpm run install:python`: install Python dependencies for agent and target
 - `pnpm run build`: build the dashboard
-- `pnpm run typecheck`: run TypeScript checks for dashboard and shared-types
+- `pnpm run typecheck`: run TypeScript checks for dashboard and shared types
 
-## What Exists Today
+Real Sentry flow:
 
-- signed Sentry webhook ingestion into the local companion service
-- normalized incident streaming to the JetBrains plugin over SSE
-- explicit human review in the plugin via `Mark Reviewed`
-- a dashboard that reflects open incidents and reviewed history from the local queue
+1. Set `SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, and `SENTRY_WEBHOOK_SECRET` in `.env`.
+2. Configure Sentry to send an issue alert webhook to `POST http://127.0.0.1:8001/sentry/webhook`.
+3. Use a tunnel if Sentry is running remotely.
 
-## Not Implemented Yet
+## Judging Story
 
-- Codex analysis, CWE classification, or fix generation
-- COE artifact generation
-- GitHub PR creation
-- Supabase-backed production data investigation
+- Pre-production is the center of gravity: the plugin finds the issue in the IDE before the code ships.
+- Human review is intentional: SecureLoop proposes a fix, but the developer decides when it applies.
+- Sentry is still valuable: it becomes the backstop for escaped issues and the same incident feed can still land in the IDE.
 
-## Documentation
+## Implemented Today
 
-- `apps/jetbrains-plugin/README.md`: plugin-specific setup and behavior
-- `docs/PLUGIN_TESTING.md`: smoke test, dashboard verification, and signed webhook checks
-- `docs/AGENT_CONTEXT.md`: internal implementation plan
-- `docs/DESIGN_DOC.md`: design rationale and tradeoffs
-- `STORYBOARD.md`: 3-minute demo storyline
+- JetBrains tool window with incident list and status
+- `Scan Current File` pre-commit analysis entry point
+- IDE line highlight for the resolved incident
+- `Run Demo` local incident injection
+- `Analyze with Codex` request path
+- rendered structured analysis, including patch text
+- `Approve Fix`, `Reject`, and `Mark Reviewed`
+- signed Sentry webhook ingestion into the companion service
+- deterministic analysis fallback when Codex is unavailable or invalid
+
+## Roadmap
+
+- dependency checker and dependency-aware guidance
+- broader project support beyond the demo repo
+- richer remediation workflows after analysis
+- production hardening around incident routing and policy coverage
+
+## Demo Script
+
+See [docs/demo-script.md](docs/demo-script.md) for the 3-minute demo, 1-minute video script, and judge Q&A.
 
 ## Security Notes
 

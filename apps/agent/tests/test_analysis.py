@@ -36,7 +36,7 @@ async def test_ide_analyze_requires_authorization(app) -> None:
 
 @pytest.mark.asyncio
 async def test_ide_analyze_returns_fake_response_when_impl_is_unavailable(app, monkeypatch) -> None:
-    monkeypatch.delenv("SECURE_LOOP_USE_FAKE_CODEX", raising=False)
+    monkeypatch.setenv("SECURE_LOOP_USE_FAKE_CODEX", "1")
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -55,7 +55,7 @@ async def test_ide_analyze_returns_fake_response_when_impl_is_unavailable(app, m
 
 @pytest.mark.asyncio
 async def test_ide_analyze_uses_demo_fallback_for_empty_body(app, monkeypatch) -> None:
-    monkeypatch.delenv("SECURE_LOOP_USE_FAKE_CODEX", raising=False)
+    monkeypatch.setenv("SECURE_LOOP_USE_FAKE_CODEX", "1")
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -69,6 +69,26 @@ async def test_ide_analyze_uses_demo_fallback_for_empty_body(app, monkeypatch) -
     assert payload["severity"] == "Medium"
     assert payload["patch"]["oldText"] == "    warehouse_name = WAREHOUSES[warehouse_id]"
     assert payload["patch"]["repoRelativePath"] == "apps/target/src/main.py"
+
+
+@pytest.mark.asyncio
+async def test_ide_analyze_fake_response_detects_demo_issue_without_exact_line(app, monkeypatch) -> None:
+    monkeypatch.setenv("SECURE_LOOP_USE_FAKE_CODEX", "1")
+    request_body = sample_analysis_request()
+    request_body["lineNumber"] = 7
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/ide/analyze",
+            json=request_body,
+            headers={"authorization": "Bearer ide-token"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["title"] == "Guard missing warehouse lookup in checkout flow"
+    assert payload["patch"]["oldText"] == "    warehouse_name = WAREHOUSES[warehouse_id]"
 
 
 @pytest.mark.asyncio

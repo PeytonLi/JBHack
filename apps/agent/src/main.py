@@ -300,7 +300,6 @@ def _build_fake_analysis(payload: AnalyzeIncidentRequest) -> AnalyzeIncidentResp
 def _is_warehouse_demo(payload: AnalyzeIncidentRequest) -> bool:
     return (
         payload.repo_relative_path == "apps/target/src/main.py"
-        and payload.line_number == 45
         and "WAREHOUSES[warehouse_id]" in payload.source_context
     )
 
