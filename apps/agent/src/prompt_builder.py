@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .models import AnalyzeIncidentRequest
+from .models import AnalyzeIncidentRequest, AnalyzeIncidentResponse
 
 
 @dataclass(slots=True)
@@ -75,8 +75,9 @@ Rules:
 - Do not assume every incident is SQL injection.
 - If the issue is functional reliability rather than exploitable security, say that clearly but still provide a CWE such as CWE-703 for improper exceptional-condition handling.
 - patch.repoRelativePath must exactly match the incident repoRelativePath.
-- patch.oldText must be an exact contiguous snippet from SOURCE_CONTEXT.
-- patch.newText must be only the replacement snippet, preserving indentation.
+- patch.oldText must be copied BYTE-FOR-BYTE from SOURCE_CONTEXT. Do not retype it; do not add or remove trailing spaces; preserve leading indentation exactly; use \n line endings only.
+- patch.oldText must include at most 12 lines and must be a single contiguous run of lines.
+- patch.newText must be the full replacement for exactly those lines, with the same leading indentation.
 - The diff must match patch.oldText and patch.newText.
 - Do not suggest writing files, running git, or applying changes automatically.
 - Keep the fix local and avoid new dependencies.
@@ -121,6 +122,44 @@ def build_codex_prompt(
             source_context=request.source_context,
             dep_scan_text=dep_scan_text.strip() or "Dependency scan not available.",
         ),
+        response_format=ANALYSIS_RESPONSE_SCHEMA,
+    )
+
+
+RETRY_CORRECTION_TEMPLATE = """Your previous response FAILED validation with these errors:
+{error_list}
+
+Previous patch.oldText (may be wrong):
+<PREV_OLD_TEXT>
+{prev_old_text}
+</PREV_OLD_TEXT>
+
+SOURCE_CONTEXT (authoritative - your patch.oldText MUST be a byte-for-byte
+contiguous slice of this):
+<SOURCE_CONTEXT>
+{source_context}
+</SOURCE_CONTEXT>
+
+Produce a corrected JSON response that fixes every listed error. Do not change
+any field that was not mentioned. Keep the same severity/CWE/category unless
+the fix genuinely requires it."""
+
+
+def build_correction_prompt(
+    request: AnalyzeIncidentRequest,
+    response: AnalyzeIncidentResponse,
+    errors: list[str],
+) -> CodexPrompt:
+    policy_text = request.policy_text.strip() if request.policy_text else "No local policy provided."
+    error_list = "\n".join(f"- {error}" for error in errors) or "- (no specific errors reported)"
+    user_message = RETRY_CORRECTION_TEMPLATE.format(
+        error_list=error_list,
+        prev_old_text=response.patch.old_text,
+        source_context=request.source_context,
+    )
+    return CodexPrompt(
+        system_prompt=SYSTEM_TEMPLATE.format(policy_text=policy_text),
+        user_message=user_message,
         response_format=ANALYSIS_RESPONSE_SCHEMA,
     )
 

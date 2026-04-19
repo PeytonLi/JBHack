@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+import logging
+from unittest.mock import AsyncMock
+
 import pytest
 
 import src.codex_analysis as codex_analysis_module
 from src.codex_analysis import analyze_incident
+from src.codex_client import CodexResult
 from src.models import AnalyzeIncidentRequest
 
 
@@ -115,3 +120,105 @@ def sample_request(line_number: int = 45) -> AnalyzeIncidentRequest:
             ]
         ),
     )
+
+
+
+def _build_codex_payload(*, old_text: str, new_text: str) -> str:
+    payload = {
+        "severity": "Medium",
+        "category": "Runtime exception",
+        "cwe": "CWE-703",
+        "title": "Guard warehouse lookup",
+        "explanation": "Guard the lookup against unknown warehouse IDs.",
+        "violatedPolicy": [
+            "Do not expose stack traces or internal exception messages to end users."
+        ],
+        "fixPlan": [
+            "Inspect the failing lookup.",
+            "Return a controlled 404 instead of raising.",
+            "Add regression test.",
+        ],
+        "diff": "--- a/apps/target/src/main.py\n+++ b/apps/target/src/main.py\n@@\n-old\n+new",
+        "patch": {
+            "repoRelativePath": "apps/target/src/main.py",
+            "oldText": old_text,
+            "newText": new_text,
+        },
+        "reasoningSteps": [
+            "Read source context.",
+            "Identify unhandled KeyError.",
+            "Propose guarded replacement.",
+        ],
+    }
+    return json.dumps(payload)
+
+
+def _prime_codex_env(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("SECURE_LOOP_USE_FAKE_CODEX", raising=False)
+
+    async def _skip_pip_audit(**_kwargs):
+        return None
+
+    monkeypatch.setattr(codex_analysis_module, "run_pip_audit", _skip_pip_audit)
+
+
+@pytest.mark.asyncio
+async def test_analyze_incident_retries_once_when_first_response_invalid(
+    monkeypatch, caplog
+) -> None:
+    _prime_codex_env(monkeypatch)
+
+    invalid_call = CodexResult(
+        raw_text=_build_codex_payload(
+            old_text="totally_hallucinated = 42",
+            new_text="totally_hallucinated = 43",
+        ),
+        success=True,
+    )
+    valid_call = CodexResult(
+        raw_text=_build_codex_payload(
+            old_text="    warehouse_name = WAREHOUSES[warehouse_id]",
+            new_text="    warehouse_name = WAREHOUSES.get(warehouse_id, 'unknown')",
+        ),
+        success=True,
+    )
+    mock_call = AsyncMock(side_effect=[invalid_call, valid_call])
+    monkeypatch.setattr(codex_analysis_module, "call_codex", mock_call)
+
+    with caplog.at_level(logging.INFO, logger="secureloop.agent.codex_analysis"):
+        response = await analyze_incident(sample_request())
+
+    assert mock_call.await_count == 2
+    assert response.patch.old_text == "    warehouse_name = WAREHOUSES[warehouse_id]"
+    assert response.patch.new_text == "    warehouse_name = WAREHOUSES.get(warehouse_id, 'unknown')"
+    assert any("recovered on retry" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_analyze_incident_falls_back_when_retry_also_fails(monkeypatch) -> None:
+    _prime_codex_env(monkeypatch)
+
+    invalid_call_a = CodexResult(
+        raw_text=_build_codex_payload(
+            old_text="hallucinated_a = 1",
+            new_text="hallucinated_a = 2",
+        ),
+        success=True,
+    )
+    invalid_call_b = CodexResult(
+        raw_text=_build_codex_payload(
+            old_text="hallucinated_b = 1",
+            new_text="hallucinated_b = 2",
+        ),
+        success=True,
+    )
+    mock_call = AsyncMock(side_effect=[invalid_call_a, invalid_call_b])
+    monkeypatch.setattr(codex_analysis_module, "call_codex", mock_call)
+
+    request = sample_request()
+    response = await analyze_incident(request)
+
+    assert mock_call.await_count == 2
+    assert "# TODO: replace with an approved SecureLoop fix." in response.patch.new_text
+    assert response.patch.old_text == request.source_context.strip()

@@ -9,6 +9,10 @@ from .models import AnalyzeIncidentRequest, AnalyzeIncidentResponse, AnalyzePatc
 VALID_SEVERITIES = {"Critical", "High", "Medium", "Low"}
 
 
+def _rstrip_lines(value: str) -> str:
+    return "\n".join(line.rstrip() for line in value.splitlines())
+
+
 def parse_analysis_response(raw_text: str) -> AnalyzeIncidentResponse:
     cleaned = (
         raw_text.strip()
@@ -38,13 +42,36 @@ def validate_analysis_response(
     if not response.patch.new_text.strip():
         errors.append("patch.newText must be non-empty")
 
-    if response.patch.old_text and response.patch.old_text not in request.source_context:
-        errors.append("patch.oldText must be an exact snippet from sourceContext")
+    if response.patch.old_text:
+        if (
+            response.patch.old_text not in request.source_context
+            and _rstrip_lines(response.patch.old_text)
+            not in _rstrip_lines(request.source_context)
+        ):
+            errors.append("patch.oldText must be an exact snippet from sourceContext")
 
     if len(response.patch.old_text.strip().splitlines()) > 12:
         errors.append("patch.oldText should be a small snippet from the current file")
 
     return errors
+
+
+def build_validation_diagnostic(
+    request: AnalyzeIncidentRequest,
+    response: AnalyzeIncidentResponse,
+    errors: list[str],
+) -> dict[str, object]:
+    return {
+        "errors": errors,
+        "oldTextPreview": response.patch.old_text[:200],
+        "oldTextLen": len(response.patch.old_text),
+        "sourceContextHead": request.source_context[:500],
+        "normalizationWouldMatch": (
+            bool(response.patch.old_text)
+            and _rstrip_lines(response.patch.old_text)
+            in _rstrip_lines(request.source_context)
+        ),
+    }
 
 
 def build_unified_diff(

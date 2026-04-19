@@ -12,10 +12,16 @@ from .models import (
     AnalyzeIncidentResponse,
     DepCheckResult,
 )
-from .prompt_builder import build_codex_prompt, build_pytest_prompt
+from .prompt_builder import (
+    CodexPrompt,
+    build_codex_prompt,
+    build_correction_prompt,
+    build_pytest_prompt,
+)
 from .validator import (
     build_patch,
     build_unified_diff,
+    build_validation_diagnostic,
     ensure_diff_matches_patch,
     normalize_policy_rules,
     parse_analysis_response,
@@ -99,6 +105,31 @@ def _resolve_repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+async def _attempt_analysis(
+    prompt: CodexPrompt,
+    request: AnalyzeIncidentRequest,
+) -> tuple[AnalyzeIncidentResponse | None, list[str]]:
+    result = await call_codex(
+        system_prompt=prompt.system_prompt,
+        user_message=prompt.user_message,
+        response_format=prompt.response_format,
+    )
+    if not result.success:
+        return None, [f"codex_call_failed:{result.error}"]
+    try:
+        response = parse_analysis_response(result.raw_text)
+    except Exception as exc:  # noqa: BLE001 - surface parse failure to caller
+        return None, [f"codex_parse_failed:{exc!r}"]
+
+    response.violated_policy = normalize_policy_rules(
+        request.policy_text or "",
+        response.violated_policy,
+    )
+    response = ensure_diff_matches_patch(response)
+    errors = validate_analysis_response(request, response)
+    return response, errors
+
+
 async def analyze_incident(request: AnalyzeIncidentRequest) -> AnalyzeIncidentResponse:
     repo_root = _resolve_repo_root()
     if request.repo_relative_path.endswith(".py"):
@@ -114,32 +145,35 @@ async def analyze_incident(request: AnalyzeIncidentRequest) -> AnalyzeIncidentRe
         return _finalize_fallback(request, dep_check)
 
     prompt = build_codex_prompt(request, dep_scan_text=dep_scan_text)
-    result = await call_codex(
-        system_prompt=prompt.system_prompt,
-        user_message=prompt.user_message,
-        response_format=prompt.response_format,
-    )
-    if not result.success:
-        logger.warning("Codex analysis unavailable; using fallback. reason=%s", result.error)
-        return _finalize_fallback(request, dep_check)
+    response, errors = await _attempt_analysis(prompt, request)
+    if response is not None and not errors:
+        return _attach_dep_check(response, dep_check)
 
-    try:
-        response = parse_analysis_response(result.raw_text)
-    except Exception:
-        logger.warning("Codex analysis returned unparseable JSON; using fallback.", exc_info=True)
-        return _finalize_fallback(request, dep_check)
+    if response is not None:
+        logger.warning(
+            "Codex analysis failed validation; retrying once. diagnostic=%s",
+            build_validation_diagnostic(request, response, errors),
+        )
+        correction = build_correction_prompt(request, response, errors)
+        response2, errors2 = await _attempt_analysis(correction, request)
+        if response2 is not None and not errors2:
+            logger.info("Codex analysis recovered on retry.")
+            return _attach_dep_check(response2, dep_check)
+        logger.warning(
+            "Codex analysis still invalid after retry; using fallback. diagnostic=%s",
+            build_validation_diagnostic(
+                request,
+                response2 or response,
+                errors2 or errors,
+            ),
+        )
+    else:
+        logger.warning(
+            "Codex analysis unavailable or unparseable; using fallback. errors=%s",
+            errors,
+        )
 
-    response.violated_policy = normalize_policy_rules(
-        request.policy_text or "",
-        response.violated_policy,
-    )
-    response = ensure_diff_matches_patch(response)
-    validation_errors = validate_analysis_response(request, response)
-    if validation_errors:
-        logger.warning("Codex analysis failed validation; using fallback. errors=%s", validation_errors)
-        return _finalize_fallback(request, dep_check)
-
-    return _attach_dep_check(response, dep_check)
+    return _finalize_fallback(request, dep_check)
 
 
 def _finalize_fallback(
