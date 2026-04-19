@@ -127,3 +127,7 @@ See [docs/demo-script.md](docs/demo-script.md) for the 3-minute demo, 1-minute v
 - `.env` is ignored by git and must never contain committed secrets.
 - Keep `.env.example` as placeholders only.
 - If a credential is ever pasted into chat, screenshots, or a public commit, rotate it immediately.
+
+## License
+
+SecureLoop is open source under the [MIT License](LICENSE).
