@@ -49,3 +49,15 @@ export type NavigateResponse = {
   subscribers: number;
   incidentId: string;
 };
+
+export type DeleteIncidentsResponse = {
+  status: "all" | "open" | "reviewed";
+  deletedCount: number;
+  incidentIds: string[];
+};
+
+export type IncidentsClearedEvent = {
+  status: "all" | "open" | "reviewed";
+  deletedCount: number;
+  incidentIds: string[];
+};

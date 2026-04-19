@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 import type {
   IncidentFeedResponse,
   IncidentRecord,
+  IncidentsClearedEvent,
   NavigateResponse,
   SentryResolutionStatus,
 } from "./types";
@@ -207,6 +208,18 @@ export function IncidentStream({ initialFeed, agentBaseUrl, onRecordsChange }: P
     };
     source.addEventListener("incident.created", handleEvent);
     source.addEventListener("incident.updated", handleEvent);
+    const handleCleared = (evt: MessageEvent) => {
+      try {
+        const cleared = JSON.parse(evt.data) as IncidentsClearedEvent;
+        const removed = new Set(cleared.incidentIds);
+        setRecords((prev) =>
+          prev.filter((r) => !removed.has(r.incident.incidentId)),
+        );
+      } catch {
+        // Ignore malformed frames; a refresh will resync.
+      }
+    };
+    source.addEventListener("incidents.cleared", handleCleared);
     return () => source.close();
   }, [agentBaseUrl]);
 
