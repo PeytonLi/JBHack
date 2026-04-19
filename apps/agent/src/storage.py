@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import aiosqlite
 
@@ -15,7 +16,11 @@ from .models import (
     IncidentSummary,
     NavigateRequest,
     NormalizedIncident,
+    PipelineStateRow,
 )
+
+
+logger = logging.getLogger("secureloop.agent.storage")
 
 
 class IncidentStore:
@@ -62,6 +67,22 @@ class IncidentStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS incident_pipeline_state (
+                    incident_id TEXT PRIMARY KEY,
+                    phase TEXT NOT NULL,
+                    step TEXT,
+                    status TEXT,
+                    pr_url TEXT,
+                    pr_number INTEGER,
+                    branch TEXT,
+                    local_artifact_path TEXT,
+                    error TEXT,
+                    updated_at TEXT NOT NULL
                 )
                 """
             )
@@ -323,6 +344,10 @@ class IncidentStore:
                 ids,
             )
             await db.execute(
+                f"DELETE FROM incident_pipeline_state WHERE incident_id IN ({placeholders})",
+                ids,
+            )
+            await db.execute(
                 f"DELETE FROM incidents WHERE incident_id IN ({placeholders})",
                 ids,
             )
@@ -361,9 +386,96 @@ class IncidentStore:
             return None
         return AnalyzeIncidentResponse.model_validate_json(row[0])
 
+    async def upsert_pipeline_state(
+        self,
+        *,
+        incident_id: str,
+        phase: Literal["running", "completed", "failed"],
+        step: str | None,
+        status: str | None,
+        pr_url: str | None,
+        pr_number: int | None,
+        branch: str | None,
+        local_artifact_path: str | None,
+        error: str | None,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO incident_pipeline_state (
+                    incident_id, phase, step, status, pr_url, pr_number,
+                    branch, local_artifact_path, error, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(incident_id) DO UPDATE SET
+                    phase = excluded.phase,
+                    step = excluded.step,
+                    status = excluded.status,
+                    pr_url = excluded.pr_url,
+                    pr_number = excluded.pr_number,
+                    branch = excluded.branch,
+                    local_artifact_path = excluded.local_artifact_path,
+                    error = excluded.error,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    incident_id,
+                    phase,
+                    step,
+                    status,
+                    pr_url,
+                    pr_number,
+                    branch,
+                    local_artifact_path,
+                    error,
+                    now,
+                ),
+            )
+            await db.commit()
+
+    async def list_pipeline_state(
+        self,
+        *,
+        incident_ids: list[str] | None = None,
+    ) -> list[PipelineStateRow]:
+        if incident_ids is not None and len(incident_ids) == 0:
+            return []
+
+        query = (
+            "SELECT incident_id, phase, step, status, pr_url, pr_number, branch, "
+            "local_artifact_path, error, updated_at FROM incident_pipeline_state"
+        )
+        params: list[Any] = []
+        if incident_ids is not None:
+            placeholders = ",".join("?" for _ in incident_ids)
+            query += f" WHERE incident_id IN ({placeholders})"
+            params.extend(incident_ids)
+
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(query, params)
+            rows = await cursor.fetchall()
+
+        return [_row_to_pipeline_state(row) for row in rows]
+
+    async def get_pipeline_state(
+        self, incident_id: str
+    ) -> PipelineStateRow | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT incident_id, phase, step, status, pr_url, pr_number, branch, "
+                "local_artifact_path, error, updated_at "
+                "FROM incident_pipeline_state WHERE incident_id = ?",
+                (incident_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return _row_to_pipeline_state(row)
+
 
 class IncidentBroker:
-    def __init__(self) -> None:
+    def __init__(self, *, store: IncidentStore) -> None:
+        self._store = store
         self._subscribers: set[asyncio.Queue[str]] = set()
         self._lock = asyncio.Lock()
         self._pending_navigates: dict[str, NavigateRequest] = {}
@@ -402,11 +514,30 @@ class IncidentBroker:
         event_type: Literal["pipeline.step", "pipeline.completed", "pipeline.failed"],
         payload: dict[str, object] | None = None,
     ) -> int:
+        data = payload or {}
+        phase = _PIPELINE_PHASE_BY_EVENT.get(event_type)
+        if phase is not None:
+            try:
+                await self._store.upsert_pipeline_state(
+                    incident_id=incident_id,
+                    phase=phase,
+                    step=_as_str(data.get("step")),
+                    status=_as_str(data.get("status")),
+                    pr_url=_as_str(data.get("prUrl")),
+                    pr_number=_as_int(data.get("prNumber")),
+                    branch=_as_str(data.get("branch")),
+                    local_artifact_path=_as_str(data.get("localArtifactPath")),
+                    error=_as_str(data.get("error")),
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "failed to persist pipeline state for %s", incident_id, exc_info=True
+                )
         envelope = {
             "type": event_type,
             "pipeline": {
                 "incidentId": incident_id,
-                **(payload or {}),
+                **data,
             },
         }
         serialized = json.dumps(envelope)
@@ -487,3 +618,59 @@ def _parse_datetime(raw_value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed
+
+
+_PIPELINE_PHASE_BY_EVENT: dict[str, Literal["running", "completed", "failed"]] = {
+    "pipeline.step": "running",
+    "pipeline.completed": "completed",
+    "pipeline.failed": "failed",
+}
+
+
+def _as_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _as_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value)
+    return None
+
+
+def _row_to_pipeline_state(row: tuple[Any, ...]) -> PipelineStateRow:
+    (
+        incident_id,
+        phase,
+        step,
+        status,
+        pr_url,
+        pr_number,
+        branch,
+        local_artifact_path,
+        error,
+        updated_at,
+    ) = row
+    return PipelineStateRow.model_validate(
+        {
+            "incident_id": incident_id,
+            "phase": phase,
+            "step": step,
+            "status": status,
+            "pr_url": pr_url,
+            "pr_number": pr_number,
+            "branch": branch,
+            "local_artifact_path": local_artifact_path,
+            "error": error,
+            "updated_at": _parse_datetime(updated_at),
+        }
+    )

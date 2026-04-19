@@ -222,6 +222,19 @@ class DeleteIncidentsResponse(CamelModel):
     incident_ids: list[str]
 
 
+class PipelineStateRow(CamelModel):
+    incident_id: str
+    phase: Literal["running", "completed", "failed"]
+    step: str | None = None
+    status: Literal["pending", "running", "completed", "failed"] | None = None
+    pr_url: str | None = None
+    pr_number: int | None = None
+    branch: str | None = None
+    local_artifact_path: str | None = None
+    error: str | None = None
+    updated_at: datetime
+
+
 def normalize_sentry_event(
     webhook: IssueAlertWebhook,
     event_payload: dict[str, Any],

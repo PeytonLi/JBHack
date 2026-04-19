@@ -127,3 +127,16 @@ export interface PipelineStepEvent {
   prUrl?: string | null;
   error?: string | null;
 }
+
+export interface PipelineStateRow {
+  incidentId: string;
+  phase: "running" | "completed" | "failed";
+  step: string | null;
+  status: "pending" | "running" | "completed" | "failed" | null;
+  prUrl: string | null;
+  prNumber: number | null;
+  branch: string | null;
+  localArtifactPath: string | null;
+  error: string | null;
+  updatedAt: string;
+}

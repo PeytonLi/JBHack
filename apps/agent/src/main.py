@@ -67,6 +67,11 @@ _DASHBOARD_FORWARDED_TYPES = {
     "pipeline.failed",
 }
 _PIPELINE_EVENT_TYPES = {"pipeline.step", "pipeline.completed", "pipeline.failed"}
+_PIPELINE_EVENT_BY_PHASE: dict[str, str] = {
+    "running": "pipeline.step",
+    "completed": "pipeline.completed",
+    "failed": "pipeline.failed",
+}
 _DEFAULT_DASHBOARD_ORIGIN = "http://localhost:3000"
 _PR_ARTIFACTS_ROOT = Path(__file__).resolve().parents[1] / "out"
 
@@ -82,7 +87,7 @@ def create_app(
 ) -> FastAPI:
     resolved_settings = settings or load_settings()
     store = IncidentStore(resolved_settings.sqlite_path)
-    broker = IncidentBroker()
+    broker = IncidentBroker(store=store)
     client = sentry_client or SentryEventClient(resolved_settings.sentry_auth_token)
 
     @asynccontextmanager
@@ -152,6 +157,18 @@ def create_app(
             raise HTTPException(status_code=404, detail="Incident not found.")
         return JSONResponse(
             record.model_dump(mode="json", by_alias=True),
+            headers={"Access-Control-Allow-Origin": dashboard_origin},
+        )
+
+    @app.get("/incidents/{incident_id}/pipeline-state")
+    async def get_incident_pipeline_state(incident_id: str) -> JSONResponse:
+        dashboard_origin = _dashboard_origin(app.state.settings)
+        row = await app.state.store.get_pipeline_state(incident_id)
+        body: Any = (
+            row.model_dump(mode="json", by_alias=True) if row is not None else None
+        )
+        return JSONResponse(
+            body,
             headers={"Access-Control-Allow-Origin": dashboard_origin},
         )
 
@@ -246,9 +263,35 @@ def create_app(
         dashboard_origin = _dashboard_origin(app.state.settings)
 
         async def event_stream() -> AsyncIterator[str]:
-            for record in await app.state.store.list_incidents(status="all", limit=50):
+            records = await app.state.store.list_incidents(status="all", limit=50)
+            for record in records:
                 body = record.model_dump_json(by_alias=True)
                 yield f"event: incident.created\ndata: {body}\n\n"
+
+            incident_ids = [record.incident.incident_id for record in records]
+            pipeline_rows = await app.state.store.list_pipeline_state(
+                incident_ids=incident_ids,
+            )
+            for row in pipeline_rows:
+                event_name = _PIPELINE_EVENT_BY_PHASE[row.phase]
+                body = json.dumps(
+                    {
+                        "incidentId": row.incident_id,
+                        "step": row.step,
+                        "status": row.status,
+                        "prUrl": row.pr_url,
+                        "prNumber": row.pr_number,
+                        "branch": row.branch,
+                        "localArtifactPath": row.local_artifact_path,
+                        "error": row.error,
+                    }
+                )
+                yield f"event: {event_name}\ndata: {body}\n\n"
+            logger.info(
+                "dashboard stream replayed incidents=%d pipeline_states=%d",
+                len(records),
+                len(pipeline_rows),
+            )
 
             queue = await app.state.broker.subscribe()
             try:

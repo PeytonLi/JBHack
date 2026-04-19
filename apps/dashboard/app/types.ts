@@ -123,6 +123,18 @@ export type PipelineStepEvent = {
   prUrl?: string | null;
   error?: string | null;
 };
+export type PipelineStateRow = {
+  incidentId: string;
+  phase: "running" | "completed" | "failed";
+  step: string | null;
+  status: "pending" | "running" | "completed" | "failed" | null;
+  prUrl: string | null;
+  prNumber: number | null;
+  branch: string | null;
+  localArtifactPath: string | null;
+  error: string | null;
+  updatedAt: string;
+};
 export type PipelineStep = {
   id: PipelineStepId;
   label: string;

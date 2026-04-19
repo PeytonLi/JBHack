@@ -80,8 +80,8 @@ async def test_analyze_emits_pipeline_step_events(app) -> None:
 
     # Register as broker subscriber by priming the next __anext__ call.
     live_task = asyncio.create_task(iterator.__anext__())
-    for _ in range(20):
-        await asyncio.sleep(0)
+    for _ in range(100):
+        await asyncio.sleep(0.01)
         if app.state.broker._subscribers:  # type: ignore[attr-defined]
             break
     assert app.state.broker._subscribers, "generator failed to subscribe"  # type: ignore[attr-defined]

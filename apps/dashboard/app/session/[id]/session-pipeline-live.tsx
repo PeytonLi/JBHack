@@ -5,12 +5,17 @@ import {
   FullPipelineView,
   derivePipelineSteps,
 } from "../../pipeline-progress";
-import type { IncidentRecord, PipelineStepEvent } from "../../types";
+import type {
+  IncidentRecord,
+  PipelineStateRow,
+  PipelineStepEvent,
+} from "../../types";
 
 type Props = {
   incidentId: string;
   initialRecord: IncidentRecord;
   agentBaseUrl: string;
+  initialPipelineState?: PipelineStateRow | null;
 };
 
 type AgentPipelinePayload = {
@@ -81,13 +86,70 @@ function translateAgentEvent(
   ];
 }
 
+function buildInitialEvents(
+  state: PipelineStateRow | null | undefined,
+  incidentId: string,
+): PipelineStepEvent[] {
+  if (!state || state.incidentId !== incidentId) return [];
+
+  type Envelope = {
+    type: "pipeline.step" | "pipeline.completed" | "pipeline.failed";
+    payload: AgentPipelinePayload;
+  };
+  const envelopes: Envelope[] = [];
+
+  if (state.phase === "running") {
+    envelopes.push({
+      type: "pipeline.step",
+      payload: { incidentId, step: state.step ?? undefined },
+    });
+  } else if (state.phase === "completed") {
+    envelopes.push({
+      type: "pipeline.step",
+      payload: { incidentId, step: "open_pr" },
+    });
+    envelopes.push({
+      type: "pipeline.completed",
+      payload: { incidentId, prUrl: state.prUrl },
+    });
+  } else {
+    envelopes.push({
+      type: "pipeline.failed",
+      payload: {
+        incidentId,
+        detail: state.error ?? undefined,
+      },
+    });
+  }
+
+  const events: PipelineStepEvent[] = [];
+  for (const env of envelopes) {
+    events.push(...translateAgentEvent(env.type, env.payload, incidentId));
+  }
+  return events;
+}
+
+function mergeEvents(
+  prev: PipelineStepEvent[],
+  incoming: PipelineStepEvent[],
+): PipelineStepEvent[] {
+  if (incoming.length === 0) return prev;
+  const byKey = new Map<string, PipelineStepEvent>();
+  for (const ev of prev) byKey.set(`${ev.incidentId}\u0000${ev.step}`, ev);
+  for (const ev of incoming) byKey.set(`${ev.incidentId}\u0000${ev.step}`, ev);
+  return Array.from(byKey.values());
+}
+
 export function SessionPipelineLive({
   incidentId,
   initialRecord,
   agentBaseUrl,
+  initialPipelineState = null,
 }: Props) {
   const [record, setRecord] = useState<IncidentRecord>(initialRecord);
-  const [events, setEvents] = useState<PipelineStepEvent[]>([]);
+  const [events, setEvents] = useState<PipelineStepEvent[]>(() =>
+    buildInitialEvents(initialPipelineState, incidentId),
+  );
 
   useEffect(() => {
     const source = new EventSource(`${agentBaseUrl}/dashboard/events/stream`);
@@ -100,7 +162,7 @@ export function SessionPipelineLive({
           const payload = JSON.parse(evt.data) as AgentPipelinePayload;
           const translated = translateAgentEvent(eventName, payload, incidentId);
           if (translated.length === 0) return;
-          setEvents((prev) => [...prev, ...translated]);
+          setEvents((prev) => mergeEvents(prev, translated));
         } catch {
           // ignore malformed frames
         }

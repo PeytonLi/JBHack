@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { SessionPipelineLive } from "./session-pipeline-live";
-import type { IncidentRecord } from "../../types";
+import type { IncidentRecord, PipelineStateRow } from "../../types";
 
 const agentBaseUrl =
   process.env.NEXT_PUBLIC_SECURE_LOOP_AGENT_URL?.trim() ||
@@ -37,6 +37,21 @@ export default async function SessionPage({
 
   const record = (await res.json()) as IncidentRecord;
 
+  let initialPipelineState: PipelineStateRow | null = null;
+  try {
+    const pipelineStateRes = await fetch(
+      `${agentBaseUrl}/incidents/${id}/pipeline-state`,
+      { cache: "no-store", headers: { Accept: "application/json" } },
+    );
+    if (pipelineStateRes.ok) {
+      initialPipelineState = (await pipelineStateRes.json()) as
+        | PipelineStateRow
+        | null;
+    }
+  } catch {
+    initialPipelineState = null;
+  }
+
   return (
     <main className="mx-auto max-w-4xl px-6 py-10 space-y-6">
       <Link
@@ -63,6 +78,7 @@ export default async function SessionPage({
       <SessionPipelineLive
         incidentId={id}
         initialRecord={record}
+        initialPipelineState={initialPipelineState}
         agentBaseUrl={agentBaseUrl}
       />
     </main>
