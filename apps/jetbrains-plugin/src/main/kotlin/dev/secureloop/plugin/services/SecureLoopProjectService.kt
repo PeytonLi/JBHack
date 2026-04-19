@@ -41,6 +41,7 @@ import dev.secureloop.plugin.util.FileResolution
 import dev.secureloop.plugin.util.ProjectFileResolver
 import java.awt.Color
 import java.awt.Font
+import java.awt.Frame
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.text.Regex
@@ -103,9 +104,25 @@ class SecureLoopProjectService(
                 0,
             )
             FileEditorManager.getInstance(project).openTextEditor(descriptor, true)
-            WindowManager.getInstance().getFrame(project)?.toFront()
-            ProjectUtil.focusProjectWindow(project, true)
+            focusProjectFrame()
         }
+    }
+
+    private fun focusProjectFrame() {
+        val frame = WindowManager.getInstance().getFrame(project) ?: return
+        val state = frame.extendedState
+        if ((state and Frame.ICONIFIED) != 0) {
+            frame.extendedState = state and Frame.ICONIFIED.inv()
+        }
+        val wasAlwaysOnTop = frame.isAlwaysOnTop
+        try {
+            frame.isAlwaysOnTop = true
+            frame.toFront()
+            frame.requestFocus()
+        } finally {
+            frame.isAlwaysOnTop = wasAlwaysOnTop
+        }
+        ProjectUtil.focusProjectWindow(project, true)
     }
 
     fun attachPanel(toolWindowPanel: SecureLoopToolWindowPanel) {
