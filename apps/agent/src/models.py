@@ -207,6 +207,8 @@ class NavigateResponse(CamelModel):
     delivered: bool
     subscribers: int
     incident_id: str
+    launched: bool = False
+    launch_reason: str | None = None
 
 
 class DeleteIncidentsResponse(CamelModel):

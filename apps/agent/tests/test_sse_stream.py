@@ -24,6 +24,7 @@ def app(tmp_path: Path):
         ide_token_file=tmp_path / "ide-token",
         ide_token="ide-token",
         agent_port=8001,
+        ide_auto_launch=False,
     )
     settings.ide_token_file.write_text(settings.ide_token, encoding="utf-8")
     return create_app(settings)
@@ -221,5 +222,51 @@ async def test_dashboard_stream_skips_ide_navigate_envelope(app) -> None:
     with pytest.raises(asyncio.TimeoutError):
         frame = await asyncio.wait_for(live_task, timeout=0.5)
         assert "event: ide.navigate" not in frame
+
+    await iterator.aclose()
+
+
+
+@pytest.mark.asyncio
+async def test_pending_navigate_replayed_to_new_subscriber(app) -> None:
+    await app.state.store.initialize()
+    seed_incident = DebugIncidentRequest(issue_id="gamma").to_incident()
+    await app.state.store.put_if_absent(seed_incident)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        post_response = await client.post(
+            "/ide/navigate",
+            json={"incidentId": seed_incident.incident_id},
+        )
+    assert post_response.status_code == 200
+    body = post_response.json()
+    assert body["delivered"] is False
+    assert body["subscribers"] == 0
+    assert body["launched"] is False
+    assert body["launchReason"] == "disabled"
+
+    route = next(
+        r for r in app.routes if getattr(r, "path", None) == "/ide/events/stream"
+        and "GET" in getattr(r, "methods", set())
+    )
+    scope, receive = _build_ide_stream_request(app)
+    request = Request(scope, receive)
+    response = await route.endpoint(request)  # type: ignore[attr-defined]
+    iterator = response.body_iterator
+
+    # Drain snapshot frame for the seeded unreviewed incident.
+    await asyncio.wait_for(iterator.__anext__(), timeout=2.0)
+
+    replay_frame = await asyncio.wait_for(iterator.__anext__(), timeout=2.0)
+    assert replay_frame.startswith("event: ide.navigate\ndata: ")
+    data_line = [ln for ln in replay_frame.splitlines() if ln.startswith("data:")][0]
+    decoded = json.loads(data_line[len("data: "):])
+    assert decoded["incidentId"] == seed_incident.incident_id
+
+    # Broker's pending map must now be empty — next frame is only a keepalive
+    # and we should not see another ide.navigate envelope within the test window.
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(iterator.__anext__(), timeout=1.0)
 
     await iterator.aclose()

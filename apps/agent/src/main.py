@@ -44,6 +44,7 @@ from .models import (
     normalize_internal_issue_event,
     normalize_sentry_event,
 )
+from .ide_launcher import IdeLauncher, LaunchResult
 from .sentry_client import SentryEventClient
 from .storage import IncidentBroker, IncidentStore
 
@@ -99,6 +100,11 @@ def create_app(
     app.state.broker = broker
     app.state.sentry_client = client
     app.state.autopilot_locks = {}
+    app.state.ide_launcher = IdeLauncher(
+        command=resolved_settings.ide_launch_command or [],
+        cwd=resolved_settings.ide_launch_cwd or Path("."),
+        enabled=resolved_settings.ide_auto_launch,
+    )
 
     @app.get("/status")
     async def status() -> JSONResponse:
@@ -205,6 +211,12 @@ def create_app(
                 yield f"data: {incident.model_dump_json(by_alias=True)}\n\n"
 
             queue = await app.state.broker.subscribe()
+            for nav in await app.state.broker.drain_pending_navigates():
+                envelope = {
+                    "type": "ide.navigate",
+                    "navigate": json.loads(nav.model_dump_json(by_alias=True)),
+                }
+                queue.put_nowait(json.dumps(envelope))
             try:
                 while True:
                     try:
@@ -213,6 +225,9 @@ def create_app(
                         envelope_type = envelope.get("type", "incident.created")
                         if envelope_type == "ide.navigate":
                             yield f"event: ide.navigate\ndata: {json.dumps(envelope['navigate'])}\n\n"
+                        elif envelope_type in _PIPELINE_EVENT_TYPES:
+                            body = json.dumps(envelope["pipeline"])
+                            yield f"event: {envelope_type}\ndata: {body}\n\n"
                         else:
                             inner_incident = envelope["incident"]["incident"]
                             yield f"data: {json.dumps(inner_incident)}\n\n"
@@ -302,10 +317,16 @@ def create_app(
             function_name=inc.function_name,
         )
         subscribers = await app.state.broker.publish_navigate(navigate)
+        if subscribers > 0:
+            launch_result = LaunchResult(launched=False, reason="plugin-connected")
+        else:
+            launch_result = await app.state.ide_launcher.ensure_running()
         body = NavigateResponse(
             delivered=subscribers > 0,
             subscribers=subscribers,
             incident_id=inc.incident_id,
+            launched=launch_result.launched,
+            launch_reason=launch_result.reason,
         )
         return JSONResponse(
             body.model_dump(mode="json", by_alias=True),

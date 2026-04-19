@@ -32,6 +32,7 @@ def app(tmp_path: Path):
         ide_token_file=tmp_path / "ide-token",
         ide_token="ide-token",
         agent_port=8001,
+        ide_auto_launch=False,
     )
     settings.ide_token_file.write_text(settings.ide_token, encoding="utf-8")
     return create_app(settings, sentry_client=StubSentryClient(sample_event_payload()))
@@ -159,6 +160,8 @@ async def test_navigate_endpoint_returns_zero_subscribers_when_no_plugin_connect
             "delivered": False,
             "subscribers": 0,
             "incidentId": incident_id,
+            "launched": False,
+            "launchReason": "disabled",
         }
         assert (
             response.headers.get("access-control-allow-origin")

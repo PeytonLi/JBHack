@@ -366,6 +366,7 @@ class IncidentBroker:
     def __init__(self) -> None:
         self._subscribers: set[asyncio.Queue[str]] = set()
         self._lock = asyncio.Lock()
+        self._pending_navigates: dict[str, NavigateRequest] = {}
 
     async def subscribe(self) -> asyncio.Queue[str]:
         queue: asyncio.Queue[str] = asyncio.Queue()
@@ -423,9 +424,19 @@ class IncidentBroker:
         payload = json.dumps(envelope)
         async with self._lock:
             subscribers = list(self._subscribers)
+            if not subscribers:
+                self._pending_navigates[navigate.incident_id] = navigate
+                return 0
+            self._pending_navigates.pop(navigate.incident_id, None)
         for queue in subscribers:
             queue.put_nowait(payload)
         return len(subscribers)
+
+    async def drain_pending_navigates(self) -> list[NavigateRequest]:
+        async with self._lock:
+            pending = list(self._pending_navigates.values())
+            self._pending_navigates.clear()
+            return pending
 
     async def publish_cleared(
         self,
