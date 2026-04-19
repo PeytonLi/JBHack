@@ -306,12 +306,12 @@ def _is_warehouse_demo(payload: AnalyzeIncidentRequest) -> bool:
 
 
 def _build_warehouse_demo_analysis(payload: AnalyzeIncidentRequest) -> AnalyzeIncidentResponse:
-    old_text = "warehouse_name = WAREHOUSES[warehouse_id]"
+    old_text = "    warehouse_name = WAREHOUSES[warehouse_id]"
     new_text = "\n".join(
         [
-            "warehouse_name = WAREHOUSES.get(warehouse_id)",
-            "if warehouse_name is None:",
-            '    raise HTTPException(status_code=409, detail="Order references an unknown warehouse.")',
+            "    warehouse_name = WAREHOUSES.get(warehouse_id)",
+            "    if warehouse_name is None:",
+            '        raise HTTPException(status_code=409, detail="Order references an unknown warehouse.")',
         ]
     )
     return AnalyzeIncidentResponse(

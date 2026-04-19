@@ -49,7 +49,7 @@ async def test_ide_analyze_returns_fake_response_when_impl_is_unavailable(app, m
     assert response.status_code == 200
     payload = response.json()
     assert payload["severity"] == "Medium"
-    assert payload["patch"]["oldText"] == "warehouse_name = WAREHOUSES[warehouse_id]"
+    assert payload["patch"]["oldText"] == "    warehouse_name = WAREHOUSES[warehouse_id]"
     assert payload["patch"]["repoRelativePath"] == "apps/target/src/main.py"
 
 
@@ -67,7 +67,7 @@ async def test_ide_analyze_uses_demo_fallback_for_empty_body(app, monkeypatch) -
     assert response.status_code == 200
     payload = response.json()
     assert payload["severity"] == "Medium"
-    assert payload["patch"]["oldText"] == "warehouse_name = WAREHOUSES[warehouse_id]"
+    assert payload["patch"]["oldText"] == "    warehouse_name = WAREHOUSES[warehouse_id]"
     assert payload["patch"]["repoRelativePath"] == "apps/target/src/main.py"
 
 
