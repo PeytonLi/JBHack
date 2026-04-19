@@ -1,6 +1,6 @@
-SecureLoop
-
 <div align="center">
+
+<h1>SecureLoop</h1>
 
 **AI security remediation that closes the loop from production alert to verified PR.**
 
