@@ -79,7 +79,7 @@ class DebugIncidentRequest(CamelModel):
     exception_message: str = "999"
     repo_relative_path: str | None = "apps/target/src/main.py"
     original_frame_path: str | None = None
-    line_number: int | None = 37
+    line_number: int | None = 45
     function_name: str | None = "checkout"
     code_context: str | None = "warehouse_name = WAREHOUSES[warehouse_id]"
     project_slug: str | None = "autoscribe-target"

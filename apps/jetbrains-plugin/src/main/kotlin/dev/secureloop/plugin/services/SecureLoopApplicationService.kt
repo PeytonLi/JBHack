@@ -338,7 +338,7 @@ class SecureLoopApplicationService : Disposable {
         return """
             {
               "repoRelativePath": "apps/target/src/main.py",
-              "lineNumber": 37,
+              "lineNumber": 45,
               "exceptionType": "RuntimeError",
               "exceptionMessage": "SecureLoop demo mode",
               "title": "SecureLoop demo incident",

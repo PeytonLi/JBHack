@@ -93,7 +93,7 @@ async def test_debug_endpoint_creates_live_incident(app) -> None:
             "/debug/incidents",
             json={
                 "repoRelativePath": "apps/target/src/main.py",
-                "lineNumber": 37,
+                "lineNumber": 45,
                 "exceptionType": "RuntimeError",
                 "exceptionMessage": "debug smoke test",
             },
@@ -126,7 +126,7 @@ def test_normalize_sentry_event_prefers_in_app_frame() -> None:
         sample_event_payload(),
     )
     assert incident.exception_type == "KeyError"
-    assert incident.line_number == 37
+    assert incident.line_number == 45
     assert incident.repo_relative_path == "apps/target/src/main.py"
 
 
@@ -177,7 +177,7 @@ def sample_event_payload() -> dict:
                                     {
                                         "filename": "/workspace/JBHack/apps/target/src/main.py",
                                         "function": "checkout",
-                                        "lineno": 37,
+                                        "lineno": 45,
                                         "context_line": "warehouse_name = WAREHOUSES[warehouse_id]",
                                         "in_app": True,
                                     },
