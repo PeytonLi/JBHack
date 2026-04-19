@@ -11,6 +11,9 @@ import dev.secureloop.plugin.model.AnalyzeIncidentRequest
 import dev.secureloop.plugin.model.AnalyzeIncidentResponse
 import dev.secureloop.plugin.model.NavigateRequest
 import dev.secureloop.plugin.model.NormalizedIncident
+import dev.secureloop.plugin.model.PipelineEventPayload
+import dev.secureloop.plugin.model.PipelineState
+import dev.secureloop.plugin.model.PipelineStepId
 import dev.secureloop.plugin.model.PullRequestResult
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -421,6 +424,10 @@ class SecureLoopApplicationService : Disposable {
                         .navigateRequested(req)
                 }
 
+                "pipeline.step", "pipeline.completed", "pipeline.failed" -> {
+                    dispatchPipelineEvent(eventName, payload)
+                }
+
                 else -> {
                     val incident = json.decodeFromString<NormalizedIncident>(payload)
                     ApplicationManager.getApplication()
@@ -432,6 +439,40 @@ class SecureLoopApplicationService : Disposable {
         } catch (t: Throwable) {
             logger.warn("Failed to dispatch SSE payload for event=$eventName", t)
         }
+    }
+
+    private fun dispatchPipelineEvent(eventName: String, payload: String) {
+        val event = json.decodeFromString<PipelineEventPayload>(payload)
+        val state: PipelineState = when (eventName) {
+            "pipeline.step" -> {
+                val step = PipelineStepId.fromWire(event.step)
+                if (step == null) {
+                    logger.warn("Ignoring pipeline.step with unknown step=${event.step}")
+                    return
+                }
+                PipelineState.Running(event.incidentId, step)
+            }
+
+            "pipeline.completed" -> PipelineState.Completed(
+                incidentId = event.incidentId,
+                prUrl = event.prUrl,
+                prNumber = event.prNumber,
+                branch = event.branch,
+                localArtifactPath = event.localArtifactPath,
+            )
+
+            "pipeline.failed" -> PipelineState.Failed(
+                incidentId = event.incidentId,
+                reason = event.reason ?: "unknown",
+                detail = event.detail ?: event.error ?: event.traceback,
+            )
+
+            else -> return
+        }
+        ApplicationManager.getApplication()
+            .messageBus
+            .syncPublisher(PIPELINE_TOPIC)
+            .pipelineStateChanged(state)
     }
 
     private fun resolveConnectionState(): AgentConnectionState {

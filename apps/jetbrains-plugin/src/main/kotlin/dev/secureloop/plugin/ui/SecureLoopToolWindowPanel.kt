@@ -10,6 +10,7 @@ import dev.secureloop.plugin.model.AgentConnectionState
 import dev.secureloop.plugin.model.AnalysisState
 import dev.secureloop.plugin.model.AnalyzeIncidentResponse
 import dev.secureloop.plugin.model.IncidentPresentation
+import dev.secureloop.plugin.model.PipelineState
 import dev.secureloop.plugin.model.ProjectCompatibilityState
 import dev.secureloop.plugin.model.ResolutionState
 import dev.secureloop.plugin.services.SecureLoopProjectService
@@ -42,6 +43,7 @@ class SecureLoopToolWindowPanel(
     private val markReviewedButton = JButton("Mark Reviewed")
     private val openSentryButton = JButton("Open Sentry")
     private val badgeLabel = JBLabel()
+    private val pipelineStrip = PipelineStrip()
     private var connectionState: AgentConnectionState = AgentConnectionState.Connecting
     private var projectCompatibility: ProjectCompatibilityState = ProjectCompatibilityState.Unsupported(
         "Open the SecureLoop demo repo to get started.",
@@ -122,7 +124,8 @@ class SecureLoopToolWindowPanel(
         }
 
         val topPanel = JPanel(BorderLayout()).apply {
-            add(statusPanel, BorderLayout.CENTER)
+            add(statusPanel, BorderLayout.NORTH)
+            add(pipelineStrip, BorderLayout.CENTER)
             add(buttonBar, BorderLayout.SOUTH)
         }
 
@@ -191,8 +194,28 @@ class SecureLoopToolWindowPanel(
         }
     }
 
+    fun updatePipelineState(state: PipelineState) {
+        val selected = selectedIncident()
+        if (selected?.incident?.incidentId == state.incidentId) {
+            refreshPipelineStrip()
+        }
+    }
+
+    private fun refreshPipelineStrip() {
+        val autopilotOn =
+            (connectionState as? AgentConnectionState.Connected)?.autopilotEnabled == true
+        val selected = selectedIncident()
+        val state = if (autopilotOn && selected != null) {
+            projectService.pipelineStateFor(selected.incident.incidentId)
+        } else {
+            null
+        }
+        pipelineStrip.applyState(state)
+    }
+
     private fun renderSelection() {
         renderEnvironment()
+        refreshPipelineStrip()
         val presentation = selectedIncident()
         if (presentation == null) {
             detailArea.text = onboardingMessage()
@@ -314,7 +337,7 @@ class SecureLoopToolWindowPanel(
             state is AgentConnectionState.Connected &&
             state.demoModeAvailable
         runDemoButton.isEnabled = demoReady
-        scanCurrentFileButton.isEnabled = compatibility is ProjectCompatibilityState.DemoReady &&
+        scanCurrentFileButton.isEnabled = compatibility !is ProjectCompatibilityState.Unsupported &&
             state is AgentConnectionState.Connected
         retryConnectionButton.isEnabled = true
         setupGuideButton.isEnabled = true
@@ -343,6 +366,9 @@ class SecureLoopToolWindowPanel(
                 }
             }
 
+            is ProjectCompatibilityState.Supported ->
+                "Waiting for an incident — click Scan Current File to analyze now."
+
             is ProjectCompatibilityState.Unsupported -> compatibility.reason
         }
     }
@@ -370,6 +396,15 @@ class SecureLoopToolWindowPanel(
                 is ProjectCompatibilityState.DemoReady -> {
                     appendLine("Demo repo detected: ${compatibility.targetPath}")
                     appendLine("Security policy detected: ${compatibility.policyPath}")
+                }
+
+                is ProjectCompatibilityState.Supported -> {
+                    when (val source = compatibility.policySource) {
+                        is ProjectCompatibilityState.PolicySource.Project ->
+                            appendLine("Security policy detected: ${source.path}")
+                        ProjectCompatibilityState.PolicySource.Bundled ->
+                            appendLine("Using bundled SecureLoop default policy.")
+                    }
                 }
 
                 is ProjectCompatibilityState.Unsupported -> {

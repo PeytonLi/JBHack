@@ -33,6 +33,7 @@ import dev.secureloop.plugin.model.AnalyzeIncidentRequest
 import dev.secureloop.plugin.model.IncidentPresentation
 import dev.secureloop.plugin.model.NavigateRequest
 import dev.secureloop.plugin.model.NormalizedIncident
+import dev.secureloop.plugin.model.PipelineState
 import dev.secureloop.plugin.model.ProjectCompatibilityState
 import dev.secureloop.plugin.model.ResolutionState
 import dev.secureloop.plugin.ui.SecureLoopGutterIconRenderer
@@ -52,6 +53,7 @@ class SecureLoopProjectService(
 ) : Disposable {
     private val logger = Logger.getInstance(SecureLoopProjectService::class.java)
     private val incidents = mutableListOf<IncidentPresentation>()
+    private val pipelineStates = mutableMapOf<String, PipelineState>()
     private val projectCompatibility = detectProjectCompatibility()
     private var panel: SecureLoopToolWindowPanel? = null
     private var connectionState: AgentConnectionState = AgentConnectionState.Connecting
@@ -83,6 +85,29 @@ class SecureLoopProjectService(
                 }
             },
         )
+        connection.subscribe(
+            PIPELINE_TOPIC,
+            object : PipelineListener {
+                override fun pipelineStateChanged(state: PipelineState) {
+                    handlePipelineState(state)
+                }
+            },
+        )
+    }
+
+    fun pipelineStateFor(incidentId: String): PipelineState? {
+        synchronized(pipelineStates) {
+            return pipelineStates[incidentId]
+        }
+    }
+
+    private fun handlePipelineState(state: PipelineState) {
+        synchronized(pipelineStates) {
+            pipelineStates[state.incidentId] = state
+        }
+        ApplicationManager.getApplication().invokeLater {
+            panel?.updatePipelineState(state)
+        }
     }
 
     private fun handleNavigateRequest(request: NavigateRequest) {
@@ -165,8 +190,8 @@ class SecureLoopProjectService(
             return
         }
 
-        if (projectCompatibility !is ProjectCompatibilityState.DemoReady) {
-            presentLocalScanError("Open the SecureLoop demo repo before scanning the current file.")
+        if (projectCompatibility is ProjectCompatibilityState.Unsupported) {
+            presentLocalScanError("Open a project before scanning the current file.")
             return
         }
 
@@ -860,13 +885,21 @@ class SecureLoopProjectService(
     }
 
     private fun readPolicyText(): String? {
-        val basePath = project.basePath ?: return null
-        val policyPath = Path.of(basePath).resolve("security-policy.md").normalize()
-        return try {
-            Files.readString(policyPath)
-        } catch (_: Exception) {
-            null
+        val basePath = project.basePath
+        if (basePath != null) {
+            val policyPath = Path.of(basePath).resolve("security-policy.md").normalize()
+            if (Files.exists(policyPath)) {
+                val projectPolicy = runCatching { Files.readString(policyPath) }.getOrNull()
+                if (projectPolicy != null) return projectPolicy
+            }
         }
+        val bundled = javaClass.getResourceAsStream("/security-policy.md")
+            ?.bufferedReader()
+            ?.use { it.readText() }
+        if (bundled != null) {
+            logger.info("Using bundled security-policy.md (project root has no policy file).")
+        }
+        return bundled
     }
 
     private fun patchMatchesTarget(
@@ -924,21 +957,26 @@ class SecureLoopProjectService(
 
     private fun detectProjectCompatibility(): ProjectCompatibilityState {
         val basePath = project.basePath ?: return ProjectCompatibilityState.Unsupported(
-            "Open the SecureLoop demo repo before running demo mode.",
+            "Open a project before running SecureLoop.",
         )
 
         val root = Path.of(basePath)
         val targetPath = root.resolve("apps/target/src/main.py")
         val policyPath = root.resolve("security-policy.md")
-        if (Files.exists(targetPath) && Files.exists(policyPath)) {
-            return ProjectCompatibilityState.DemoReady(
+        val hasTarget = Files.exists(targetPath)
+        val hasPolicy = Files.exists(policyPath)
+
+        return when {
+            hasTarget && hasPolicy -> ProjectCompatibilityState.DemoReady(
                 targetPath = "apps/target/src/main.py",
                 policyPath = "security-policy.md",
             )
+            hasPolicy -> ProjectCompatibilityState.Supported(
+                ProjectCompatibilityState.PolicySource.Project("security-policy.md"),
+            )
+            else -> ProjectCompatibilityState.Supported(
+                ProjectCompatibilityState.PolicySource.Bundled,
+            )
         }
-
-        return ProjectCompatibilityState.Unsupported(
-            "v1 supports the SecureLoop demo repo only. Open a project containing apps/target/src/main.py and security-policy.md.",
-        )
     }
 }

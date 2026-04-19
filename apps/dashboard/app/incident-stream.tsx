@@ -10,6 +10,7 @@ import {
   ExternalLink,
   Eye,
   FileCode2,
+  FlaskConical,
   FunctionSquare,
   GitPullRequest,
   Loader2,
@@ -167,6 +168,12 @@ const fadeIn = {
   },
 };
 
+function useMounted(): boolean {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  return mounted;
+}
+
 /* ── Main component ────────────────────────────────────── */
 type ToastKind = "success" | "info" | "error";
 type ToastState = { message: string; kind: ToastKind } | null;
@@ -210,11 +217,36 @@ export function IncidentStream({
         return;
       }
       const body = (await res.json()) as NavigateResponse;
-      setToast(
-        body.delivered
-          ? { message: "Sent to IDE", kind: "success" }
-          : { message: "IDE plugin not connected", kind: "info" },
-      );
+      if (body.delivered) {
+        setToast({ message: "Sent to IDE", kind: "success" });
+      } else if (body.launched) {
+        setToast({
+          message: "Launching sandbox IDE… the file will open in ~20s",
+          kind: "info",
+        });
+      } else {
+        switch (body.launchReason) {
+          case "already-running":
+            setToast({ message: "Launching sandbox IDE…", kind: "info" });
+            break;
+          case "debounced":
+            setToast({ message: "Sandbox IDE starting — please wait", kind: "info" });
+            break;
+          case "gradlew-not-found":
+            setToast({
+              message:
+                "Could not find gradlew in apps/jetbrains-plugin — start the IDE manually",
+              kind: "error",
+            });
+            break;
+          case "spawn-error":
+            setToast({ message: "Failed to launch sandbox IDE", kind: "error" });
+            break;
+          case "disabled":
+          default:
+            setToast({ message: "IDE plugin not connected", kind: "info" });
+        }
+      }
     } catch {
       setToast({ message: "Failed to reach agent", kind: "error" });
     }
@@ -521,6 +553,15 @@ function IncidentCard({
   const StatusIcon = statusStyle.icon;
   const SentryIcon = sentryStyle.icon;
   const canOpenInIde = Boolean(record.incident.repoRelativePath);
+  const mounted = useMounted();
+  const receivedValue = mounted ? formatTimestamp(record.createdAt) : "";
+  const receivedRelative = mounted ? relativeTime(record.createdAt) : "";
+  const reviewStateValue =
+    record.status === "reviewed"
+      ? mounted
+        ? `Reviewed ${formatTimestamp(record.reviewedAt)}`
+        : "Reviewed"
+      : "Waiting for human review in the IDE";
 
   return (
     <motion.article
@@ -581,10 +622,8 @@ function IncidentCard({
         {/* Action buttons */}
         <div className="flex items-center gap-2 shrink-0">
           {!autopilotEnabled && (
-            <motion.button
+            <button
               type="button"
-              whileHover={canOpenInIde ? { scale: 1.04 } : undefined}
-              whileTap={canOpenInIde ? { scale: 0.97 } : undefined}
               disabled={!canOpenInIde || !onOpenInIde}
               onClick={() =>
                 canOpenInIde && onOpenInIde?.(record.incident.incidentId)
@@ -594,11 +633,11 @@ function IncidentCard({
                   ? "Open this file in your running JetBrains IDE"
                   : "No repo-relative path available for this incident"
               }
-              className="flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/8 px-4 py-2 text-xs font-semibold text-amber-300 transition-all hover:border-amber-300/40 hover:bg-amber-400/15 hover:shadow-[0_4px_20px_rgba(251,191,36,0.12)] cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-amber-400/20 disabled:hover:bg-amber-400/8 disabled:hover:shadow-none"
+              className="flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/8 px-4 py-2 text-xs font-semibold text-amber-300 transition-all hover:border-amber-300/40 hover:bg-amber-400/15 hover:shadow-[0_4px_20px_rgba(251,191,36,0.12)] hover:scale-[1.04] active:scale-[0.97] cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100 disabled:hover:border-amber-400/20 disabled:hover:bg-amber-400/8 disabled:hover:shadow-none"
             >
               <FileCode2 className="w-3.5 h-3.5" />
               Open in IDE
-            </motion.button>
+            </button>
           )}
           <motion.a
             whileHover={{ scale: 1.04 }}
@@ -631,17 +670,13 @@ function IncidentCard({
         <DetailCell
           icon={Clock}
           label="Received"
-          value={formatTimestamp(record.createdAt)}
-          secondary={relativeTime(record.createdAt)}
+          value={receivedValue}
+          secondary={receivedRelative}
         />
         <DetailCell
           icon={Eye}
           label="Review State"
-          value={
-            record.status === "reviewed"
-              ? `Reviewed ${formatTimestamp(record.reviewedAt)}`
-              : "Waiting for human review in the IDE"
-          }
+          value={reviewStateValue}
         />
       </dl>
 
@@ -672,11 +707,34 @@ function IncidentCard({
 const PIPELINE_STEPS: { id: AutopilotStepId; label: string; icon: typeof Search }[] = [
   { id: "fetch_source", label: "Fetch", icon: Download },
   { id: "analyze", label: "Analyze", icon: Search },
+  { id: "sandbox", label: "Sandbox", icon: FlaskConical },
   { id: "open_pr", label: "Open PR", icon: GitPullRequest },
 ];
 
+const FAILURE_REASON_LABELS: Record<string, string> = {
+  incident_not_found: "Incident not found",
+  missing_source_metadata: "Missing source metadata",
+  source_file_not_found: "Source file not found",
+  patch_mismatch: "Patch did not apply",
+  sandbox_test_generation_failed: "Test generation failed",
+  sandbox_did_not_reproduce: "Did not reproduce bug",
+  sandbox_fix_failed: "Fix did not pass sandbox",
+  sandbox_timeout: "Sandbox timed out",
+  sandbox_runner_error: "Sandbox runner error",
+  internal_error: "Internal error",
+};
+
+function failureReasonLabel(reason: string): string {
+  return FAILURE_REASON_LABELS[reason] ?? reason;
+}
+
 function isAutopilotStepId(value: unknown): value is AutopilotStepId {
-  return value === "fetch_source" || value === "analyze" || value === "open_pr";
+  return (
+    value === "fetch_source" ||
+    value === "analyze" ||
+    value === "sandbox" ||
+    value === "open_pr"
+  );
 }
 
 function stepIndex(step: AutopilotStepId): number {
@@ -713,7 +771,7 @@ function PipelineStrip({ pipeline }: { pipeline: AutopilotStatus }) {
         {failed && "reason" in pipeline ? (
           <span className="inline-flex items-center gap-1.5 rounded-full border border-red-400/25 bg-red-500/10 px-3 py-1 text-[0.65rem] font-semibold text-red-300">
             <XCircle className="w-3 h-3" />
-            {pipeline.reason}
+            {failureReasonLabel(pipeline.reason)}
           </span>
         ) : null}
       </div>

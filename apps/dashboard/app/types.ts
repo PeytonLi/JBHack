@@ -48,6 +48,8 @@ export type NavigateResponse = {
   delivered: boolean;
   subscribers: number;
   incidentId: string;
+  launched: boolean;
+  launchReason: string | null;
 };
 
 export type DeleteIncidentsResponse = {
@@ -68,7 +70,19 @@ export type AgentStatusResponse = {
   codexAvailable: boolean;
 };
 
-export type AutopilotStepId = "fetch_source" | "analyze" | "open_pr";
+export type AutopilotStepId = "fetch_source" | "analyze" | "sandbox" | "open_pr";
+
+export type AutopilotFailureReason =
+  | "incident_not_found"
+  | "missing_source_metadata"
+  | "source_file_not_found"
+  | "patch_mismatch"
+  | "sandbox_test_generation_failed"
+  | "sandbox_did_not_reproduce"
+  | "sandbox_fix_failed"
+  | "sandbox_timeout"
+  | "sandbox_runner_error"
+  | "internal_error";
 
 export type AutopilotStepEvent = {
   incidentId: string;

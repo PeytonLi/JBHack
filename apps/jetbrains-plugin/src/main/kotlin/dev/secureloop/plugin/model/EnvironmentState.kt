@@ -44,7 +44,16 @@ sealed interface ProjectCompatibilityState {
         val policyPath: String,
     ) : ProjectCompatibilityState
 
+    data class Supported(
+        val policySource: PolicySource,
+    ) : ProjectCompatibilityState
+
     data class Unsupported(
         val reason: String,
     ) : ProjectCompatibilityState
+
+    sealed interface PolicySource {
+        data class Project(val path: String) : PolicySource
+        data object Bundled : PolicySource
+    }
 }

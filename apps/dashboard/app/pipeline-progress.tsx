@@ -121,8 +121,6 @@ export function CompactPipelineBar({ steps }: { steps: PipelineStep[] }) {
     <div className="flex items-center gap-1">
       {steps.map((step, idx) => {
         const { bg, icon: Icon } = pipStyle(step.status);
-        const prevCompleted =
-          idx > 0 && steps[idx - 1].status === "completed";
         const showZap = onlyIngestedDone && step.id === "ingested";
         return (
           <div key={step.id} className="flex items-center gap-1">
@@ -142,7 +140,7 @@ export function CompactPipelineBar({ steps }: { steps: PipelineStep[] }) {
             </motion.div>
             {idx < steps.length - 1 ? (
               <div
-                className={`h-px w-4 ${prevCompleted ? "bg-emerald-400/60" : "bg-white/10"}`}
+                className={`h-px w-4 ${step.status === "completed" ? "bg-emerald-400/60" : "bg-white/10"}`}
               />
             ) : null}
           </div>

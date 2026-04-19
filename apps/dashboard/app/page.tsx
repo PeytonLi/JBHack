@@ -313,30 +313,28 @@ export default function Home() {
                 <Zap className="w-4 h-4" />
                 Run <code className="font-mono text-xs text-white/70">runIde</code>
               </motion.a>
-              <motion.button
+              <button
+                type="button"
                 onClick={() => clearIncidents("open")}
                 disabled={clearing !== null || displayOpen === 0}
-                whileHover={{ scale: clearing ? 1 : 1.03 }}
-                whileTap={{ scale: clearing ? 1 : 0.97 }}
-                className="flex items-center gap-2 rounded-full border border-red-400/25 bg-red-500/10 px-6 py-3 text-sm font-semibold text-red-200 transition hover:border-red-300/50 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                className="flex items-center gap-2 rounded-full border border-red-400/25 bg-red-500/10 px-6 py-3 text-sm font-semibold text-red-200 transition hover:border-red-300/50 hover:bg-red-500/15 hover:scale-[1.03] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100 cursor-pointer"
               >
                 <Trash2
                   className={`w-4 h-4 ${clearing === "open" ? "animate-pulse" : ""}`}
                 />
                 Clear Open
-              </motion.button>
-              <motion.button
+              </button>
+              <button
+                type="button"
                 onClick={() => clearIncidents("reviewed")}
                 disabled={clearing !== null || displayReviewed === 0}
-                whileHover={{ scale: clearing ? 1 : 1.03 }}
-                whileTap={{ scale: clearing ? 1 : 0.97 }}
-                className="flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-6 py-3 text-sm font-semibold text-emerald-200 transition hover:border-emerald-300/50 hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                className="flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-6 py-3 text-sm font-semibold text-emerald-200 transition hover:border-emerald-300/50 hover:bg-emerald-500/15 hover:scale-[1.03] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100 cursor-pointer"
               >
                 <Trash2
                   className={`w-4 h-4 ${clearing === "reviewed" ? "animate-pulse" : ""}`}
                 />
                 Clear Reviewed
-              </motion.button>
+              </button>
             </div>
           </motion.div>
 
