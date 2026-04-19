@@ -123,3 +123,88 @@ def build_codex_prompt(
         ),
         response_format=ANALYSIS_RESPONSE_SCHEMA,
     )
+
+
+PYTEST_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "json_schema",
+    "name": "secureloop_sandbox_pytest",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "testFileRelativePath": {"type": "string"},
+            "testCode": {"type": "string"},
+            "rationale": {"type": "string"},
+        },
+        "required": ["testFileRelativePath", "testCode", "rationale"],
+    },
+}
+
+
+PYTEST_SYSTEM_TEMPLATE = """You are SecureLoop's Codex sandbox engineer.
+
+Your job:
+- Given an incident and a proposed unified diff, write ONE pytest module that reproduces the bug against the ORIGINAL source and passes against the PATCHED source.
+- The test will be executed twice: once with the original file at repoRelativePath, once with the patched file at the same path. No other files change between runs.
+- The sandbox writes repoRelativePath under a temp root and prepends that root to PYTHONPATH, so imports must use the repo-relative dotted module path (for example apps/target/src/main.py -> apps.target.src.main).
+
+Rules:
+- Output a single self-contained pytest file as testCode.
+- Use only the stdlib plus pytest. Do not import third-party packages beyond what the target module already imports.
+- Do not read or write files outside the test, do not call network services, do not spawn subprocesses.
+- If the target is a FastAPI app, use fastapi.testclient.TestClient against the app symbol.
+- Prefer one concise test function that asserts the controlled behaviour introduced by the patch (for example a 4xx status code instead of an unhandled 500 / raised exception).
+- testFileRelativePath must be tests/autopilot/test_inc_<incidentId>.py with <incidentId> substituted.
+- The test MUST fail on the original code and pass on the patched code."""
+
+
+PYTEST_USER_TEMPLATE = """<INCIDENT>
+incidentId: {incident_id}
+repoRelativePath: {repo_relative_path}
+lineNumber: {line_number}
+exceptionType: {exception_type}
+exceptionMessage: {exception_message}
+title: {title}
+</INCIDENT>
+
+<PROPOSED_DIFF>
+{diff}
+</PROPOSED_DIFF>
+
+<ORIGINAL_SOURCE path="{repo_relative_path}">
+{original_source}
+</ORIGINAL_SOURCE>
+
+<PATCHED_SOURCE path="{repo_relative_path}">
+{patched_source}
+</PATCHED_SOURCE>"""
+
+
+def build_pytest_prompt(
+    *,
+    incident_id: str,
+    repo_relative_path: str,
+    line_number: int,
+    exception_type: str,
+    exception_message: str,
+    title: str,
+    diff: str,
+    original_source: str,
+    patched_source: str,
+) -> CodexPrompt:
+    return CodexPrompt(
+        system_prompt=PYTEST_SYSTEM_TEMPLATE,
+        user_message=PYTEST_USER_TEMPLATE.format(
+            incident_id=incident_id,
+            repo_relative_path=repo_relative_path,
+            line_number=line_number,
+            exception_type=exception_type,
+            exception_message=exception_message,
+            title=title,
+            diff=diff,
+            original_source=original_source,
+            patched_source=patched_source,
+        ),
+        response_format=PYTEST_RESPONSE_SCHEMA,
+    )

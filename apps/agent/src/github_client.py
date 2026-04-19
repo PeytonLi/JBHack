@@ -78,6 +78,7 @@ class GitHubClient:
         relative_path: str,
         updated_file_content: str,
         base_branch: str | None = None,
+        extra_files: list[tuple[str, str]] | None = None,
     ) -> PullRequestResult:
         base = base_branch or self.default_branch
         branch = _branch_name(incident_id, analysis)
@@ -101,6 +102,25 @@ class GitHubClient:
                 sha=existing,
                 branch=branch,
             )
+
+        for extra_path, extra_content in extra_files or []:
+            extra_sha = self._get_file_sha(extra_path, branch)
+            extra_message = f"test(security): add sandbox reproduction for {incident_id}"
+            if extra_sha is None:
+                self._repo.create_file(
+                    path=extra_path,
+                    message=extra_message,
+                    content=extra_content,
+                    branch=branch,
+                )
+            else:
+                self._repo.update_file(
+                    path=extra_path,
+                    message=extra_message,
+                    content=extra_content,
+                    sha=extra_sha,
+                    branch=branch,
+                )
 
         pr = self._repo.create_pull(
             title=commit_message,

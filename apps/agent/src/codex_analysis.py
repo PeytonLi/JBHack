@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from .codex_client import call_codex, codex_available
@@ -11,7 +13,7 @@ from .models import (
     AnalyzePatch,
     DepCheckResult,
 )
-from .prompt_builder import build_codex_prompt
+from .prompt_builder import build_codex_prompt, build_pytest_prompt
 from .validator import (
     build_patch,
     build_unified_diff,
@@ -25,16 +27,88 @@ from .validator import (
 logger = logging.getLogger("secureloop.agent.codex_analysis")
 
 
+class SandboxTestGenerationError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class GeneratedSandboxTest:
+    test_file_relative_path: str
+    test_code: str
+    rationale: str
+
+
+async def generate_sandbox_test(
+    *,
+    incident_id: str,
+    repo_relative_path: str,
+    line_number: int,
+    exception_type: str,
+    exception_message: str,
+    title: str,
+    diff: str,
+    original_source: str,
+    patched_source: str,
+) -> GeneratedSandboxTest:
+    if not codex_available():
+        raise SandboxTestGenerationError(
+            "Codex unavailable: cannot generate sandbox test."
+        )
+
+    prompt = build_pytest_prompt(
+        incident_id=incident_id,
+        repo_relative_path=repo_relative_path,
+        line_number=line_number,
+        exception_type=exception_type,
+        exception_message=exception_message,
+        title=title,
+        diff=diff,
+        original_source=original_source,
+        patched_source=patched_source,
+    )
+    result = await call_codex(
+        system_prompt=prompt.system_prompt,
+        user_message=prompt.user_message,
+        response_format=prompt.response_format,
+        max_output_tokens=2000,
+    )
+    if not result.success:
+        raise SandboxTestGenerationError(result.error or "Codex call failed.")
+
+    try:
+        payload = json.loads(result.raw_text)
+    except json.JSONDecodeError as exc:
+        raise SandboxTestGenerationError(
+            f"Codex returned non-JSON sandbox test: {exc}"
+        ) from exc
+
+    test_path = str(payload.get("testFileRelativePath") or "").strip()
+    test_code = str(payload.get("testCode") or "")
+    rationale = str(payload.get("rationale") or "")
+    if not test_path or not test_code.strip():
+        raise SandboxTestGenerationError(
+            "Codex sandbox response missing testFileRelativePath or testCode."
+        )
+    return GeneratedSandboxTest(
+        test_file_relative_path=test_path,
+        test_code=test_code,
+        rationale=rationale,
+    )
+
+
 def _resolve_repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
 async def analyze_incident(request: AnalyzeIncidentRequest) -> AnalyzeIncidentResponse:
     repo_root = _resolve_repo_root()
-    dep_check = await run_pip_audit(
-        repo_root=repo_root,
-        target_requirements=repo_root / "apps/target/requirements.txt",
-    )
+    if request.repo_relative_path.endswith(".py"):
+        dep_check = await run_pip_audit(
+            repo_root=repo_root,
+            target_requirements=repo_root / "apps/target/requirements.txt",
+        )
+    else:
+        dep_check = None
     dep_scan_text = format_dep_scan_for_prompt(dep_check)
 
     if not codex_available():

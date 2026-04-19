@@ -4,11 +4,17 @@ import asyncio
 import logging
 import os
 import traceback
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
 from fastapi import FastAPI
 
+from .codex_analysis import (
+    GeneratedSandboxTest,
+    SandboxTestGenerationError,
+    generate_sandbox_test,
+)
 from .config import Settings
 from .github_client import FetchedFile, GitHubClient, PullRequestResult
 from .models import (
@@ -17,6 +23,7 @@ from .models import (
     AnalyzePatch,
     NormalizedIncident,
 )
+from .sandbox_runner import SandboxResult, run_sandbox_test
 
 
 logger = logging.getLogger("secureloop.agent.autopilot")
@@ -171,6 +178,37 @@ async def _run_autopilot_locked(app: FastAPI, incident_id: str) -> None:
         )
         return
 
+    extra_files: list[tuple[str, str]] = []
+    if _sandbox_enabled() and (incident.repo_relative_path or "").endswith(".py"):
+        await broker.publish_pipeline(
+            incident_id=incident_id,
+            event_type="pipeline.step",
+            payload={"step": "sandbox"},
+        )
+        sandbox_outcome = await _run_sandbox_step(
+            incident=incident,
+            analysis=analysis,
+            original_content=fetched.content,
+            patched_content=updated_content,
+        )
+        if sandbox_outcome.failure_reason is not None:
+            await broker.publish_pipeline(
+                incident_id=incident_id,
+                event_type="pipeline.failed",
+                payload={
+                    "reason": sandbox_outcome.failure_reason,
+                    "detail": sandbox_outcome.failure_detail,
+                },
+            )
+            return
+        assert sandbox_outcome.generated is not None
+        extra_files.append(
+            (
+                sandbox_outcome.generated.test_file_relative_path,
+                sandbox_outcome.generated.test_code,
+            )
+        )
+
     await broker.publish_pipeline(
         incident_id=incident_id,
         event_type="pipeline.step",
@@ -183,6 +221,7 @@ async def _run_autopilot_locked(app: FastAPI, incident_id: str) -> None:
         analysis=analysis,
         relative_path=incident.repo_relative_path,
         updated_file_content=updated_content,
+        extra_files=extra_files,
     )
     await broker.publish_pipeline(
         incident_id=incident_id,
@@ -213,6 +252,7 @@ async def _open_pr_async(
     analysis: AnalyzeIncidentResponse,
     relative_path: str,
     updated_file_content: str,
+    extra_files: list[tuple[str, str]] | None = None,
 ) -> PullRequestResult:
     def _call() -> PullRequestResult:
         client = GitHubClient(token, repo)
@@ -221,6 +261,7 @@ async def _open_pr_async(
             analysis=analysis,
             relative_path=relative_path,
             updated_file_content=updated_file_content,
+            extra_files=extra_files,
         )
 
     return await asyncio.to_thread(_call)
@@ -230,3 +271,89 @@ async def _resolve_analysis(request: AnalyzeIncidentRequest) -> AnalyzeIncidentR
     from .main import _resolve_analysis as resolve
 
     return await resolve(request)
+
+
+def _sandbox_enabled() -> bool:
+    disabled = os.environ.get("SECURE_LOOP_AUTOPILOT_SANDBOX_DISABLED", "").strip().lower()
+    return disabled not in {"1", "true", "yes"}
+
+
+@dataclass(frozen=True)
+class _SandboxOutcome:
+    generated: GeneratedSandboxTest | None
+    result: SandboxResult | None
+    failure_reason: str | None
+    failure_detail: str | None
+
+
+async def _run_sandbox_step(
+    *,
+    incident: NormalizedIncident,
+    analysis: AnalyzeIncidentResponse,
+    original_content: str,
+    patched_content: str,
+) -> _SandboxOutcome:
+    try:
+        generated = await generate_sandbox_test(
+            incident_id=incident.incident_id,
+            repo_relative_path=incident.repo_relative_path or "",
+            line_number=incident.line_number or 1,
+            exception_type=incident.exception_type,
+            exception_message=incident.exception_message,
+            title=incident.title,
+            diff=analysis.diff,
+            original_source=original_content,
+            patched_source=patched_content,
+        )
+    except SandboxTestGenerationError as exc:
+        logger.warning("autopilot: sandbox test generation failed: %s", exc)
+        return _SandboxOutcome(
+            generated=None,
+            result=None,
+            failure_reason="sandbox_test_generation_failed",
+            failure_detail=str(exc),
+        )
+
+    try:
+        result = await run_sandbox_test(
+            original_content=original_content,
+            patched_content=patched_content,
+            repo_relative_path=incident.repo_relative_path or "",
+            test_code=generated.test_code,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("autopilot: sandbox runner crashed.")
+        return _SandboxOutcome(
+            generated=generated,
+            result=None,
+            failure_reason="sandbox_runner_error",
+            failure_detail=str(exc),
+        )
+
+    if result.timed_out:
+        return _SandboxOutcome(
+            generated=generated,
+            result=result,
+            failure_reason="sandbox_timeout",
+            failure_detail=None,
+        )
+    if not result.reproduced_bug:
+        return _SandboxOutcome(
+            generated=generated,
+            result=result,
+            failure_reason="sandbox_did_not_reproduce",
+            failure_detail=(result.original_stdout + result.original_stderr)[-800:],
+        )
+    if not result.fix_passes:
+        return _SandboxOutcome(
+            generated=generated,
+            result=result,
+            failure_reason="sandbox_fix_failed",
+            failure_detail=(result.patched_stdout + result.patched_stderr)[-800:],
+        )
+    return _SandboxOutcome(
+        generated=generated,
+        result=result,
+        failure_reason=None,
+        failure_detail=None,
+    )
