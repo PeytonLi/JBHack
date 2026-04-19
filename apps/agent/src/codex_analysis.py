@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from .codex_client import call_codex, codex_available
-from .models import AnalyzeIncidentRequest, AnalyzeIncidentResponse, AnalyzePatch
+from .dep_check import format_dep_scan_for_prompt, run_pip_audit
+from .models import (
+    AnalyzeIncidentRequest,
+    AnalyzeIncidentResponse,
+    AnalyzePatch,
+    DepCheckResult,
+)
 from .prompt_builder import build_codex_prompt
 from .validator import (
     build_patch,
@@ -18,11 +25,22 @@ from .validator import (
 logger = logging.getLogger("secureloop.agent.codex_analysis")
 
 
-async def analyze_incident(request: AnalyzeIncidentRequest) -> AnalyzeIncidentResponse:
-    if not codex_available():
-        return _build_fallback_response(request)
+def _resolve_repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
 
-    prompt = build_codex_prompt(request)
+
+async def analyze_incident(request: AnalyzeIncidentRequest) -> AnalyzeIncidentResponse:
+    repo_root = _resolve_repo_root()
+    dep_check = await run_pip_audit(
+        repo_root=repo_root,
+        target_requirements=repo_root / "apps/target/requirements.txt",
+    )
+    dep_scan_text = format_dep_scan_for_prompt(dep_check)
+
+    if not codex_available():
+        return _finalize_fallback(request, dep_check)
+
+    prompt = build_codex_prompt(request, dep_scan_text=dep_scan_text)
     result = await call_codex(
         system_prompt=prompt.system_prompt,
         user_message=prompt.user_message,
@@ -30,13 +48,13 @@ async def analyze_incident(request: AnalyzeIncidentRequest) -> AnalyzeIncidentRe
     )
     if not result.success:
         logger.warning("Codex analysis unavailable; using fallback. reason=%s", result.error)
-        return _build_fallback_response(request)
+        return _finalize_fallback(request, dep_check)
 
     try:
         response = parse_analysis_response(result.raw_text)
     except Exception:
         logger.warning("Codex analysis returned unparseable JSON; using fallback.", exc_info=True)
-        return _build_fallback_response(request)
+        return _finalize_fallback(request, dep_check)
 
     response.violated_policy = normalize_policy_rules(
         request.policy_text or "",
@@ -46,8 +64,30 @@ async def analyze_incident(request: AnalyzeIncidentRequest) -> AnalyzeIncidentRe
     validation_errors = validate_analysis_response(request, response)
     if validation_errors:
         logger.warning("Codex analysis failed validation; using fallback. errors=%s", validation_errors)
-        return _build_fallback_response(request)
+        return _finalize_fallback(request, dep_check)
 
+    return _attach_dep_check(response, dep_check)
+
+
+def _finalize_fallback(
+    request: AnalyzeIncidentRequest,
+    dep_check: DepCheckResult | None,
+) -> AnalyzeIncidentResponse:
+    return _attach_dep_check(_build_fallback_response(request), dep_check)
+
+
+def _attach_dep_check(
+    response: AnalyzeIncidentResponse,
+    dep_check: DepCheckResult | None,
+) -> AnalyzeIncidentResponse:
+    response.dep_check = dep_check
+    if dep_check is None and not any(
+        step.startswith("Dependency scan unavailable") for step in response.reasoning_steps
+    ):
+        response.reasoning_steps.insert(
+            0,
+            "Dependency scan unavailable (pip-audit binary missing or timed out).",
+        )
     return response
 
 

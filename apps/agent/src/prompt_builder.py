@@ -39,6 +39,12 @@ ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
                 },
                 "required": ["repoRelativePath", "oldText", "newText"],
             },
+            "reasoningSteps": {
+                "type": "array",
+                "items": {"type": "string", "maxLength": 200},
+                "minItems": 3,
+                "maxItems": 6,
+            },
         },
         "required": [
             "severity",
@@ -50,6 +56,7 @@ ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
             "fixPlan",
             "diff",
             "patch",
+            "reasoningSteps",
         ],
     },
 }
@@ -90,10 +97,17 @@ title: {title}
 
 <SOURCE_CONTEXT>
 {source_context}
-</SOURCE_CONTEXT>"""
+</SOURCE_CONTEXT>
+
+<DEPENDENCY_SCAN>
+{dep_scan_text}
+</DEPENDENCY_SCAN>"""
 
 
-def build_codex_prompt(request: AnalyzeIncidentRequest) -> CodexPrompt:
+def build_codex_prompt(
+    request: AnalyzeIncidentRequest,
+    dep_scan_text: str = "Dependency scan not available.",
+) -> CodexPrompt:
     policy_text = request.policy_text.strip() if request.policy_text else "No local policy provided."
     return CodexPrompt(
         system_prompt=SYSTEM_TEMPLATE.format(policy_text=policy_text),
@@ -105,6 +119,7 @@ def build_codex_prompt(request: AnalyzeIncidentRequest) -> CodexPrompt:
             exception_message=request.exception_message,
             title=request.title,
             source_context=request.source_context,
+            dep_scan_text=dep_scan_text.strip() or "Dependency scan not available.",
         ),
         response_format=ANALYSIS_RESPONSE_SCHEMA,
     )
