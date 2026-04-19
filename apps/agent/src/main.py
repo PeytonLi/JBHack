@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import inspect
+import json
 from importlib import import_module
 import logging
 import os
@@ -22,7 +23,11 @@ from .models import (
     AnalyzePatch,
     DebugIncidentRequest,
     IncidentFeedResponse,
+    InternalErrorWebhook,
+    InternalIssueWebhook,
     IssueAlertWebhook,
+    normalize_internal_error_event,
+    normalize_internal_issue_event,
     normalize_sentry_event,
 )
 from .sentry_client import SentryEventClient
@@ -38,6 +43,8 @@ ANALYZE_MODULE_CANDIDATES = (
     "src.ide_analyze",
     "src.codex_analysis",
 )
+_SUPPORTED_RESOURCES = {"event_alert", "issue", "error"}
+_DEFAULT_DASHBOARD_ORIGIN = "http://localhost:3000"
 
 
 def create_app(
@@ -94,32 +101,14 @@ def create_app(
     async def sentry_webhook(request: Request) -> Response:
         settings_state: Settings = app.state.settings
         raw_body = await request.body()
-        _verify_sentry_request(request, raw_body, settings_state)
+        resource = _verify_sentry_request(request, raw_body, settings_state)
 
-        try:
-            payload = IssueAlertWebhook.model_validate_json(raw_body)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid webhook payload.") from exc
-
-        if payload.action != "triggered":
-            return Response(status_code=204)
-
-        try:
-            event_payload = await app.state.sentry_client.fetch_event(payload.data.event.url)
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except httpx.HTTPError as exc:
-            logger.exception("Failed to fetch Sentry event details.")
-            raise HTTPException(
-                status_code=502,
-                detail="Unable to fetch event details from Sentry.",
-            ) from exc
-
-        incident = normalize_sentry_event(payload, event_payload)
-        created = await app.state.store.put_if_absent(incident)
-        if created:
-            await app.state.broker.publish(incident)
-
+        if resource == "event_alert":
+            return await _handle_event_alert(app, raw_body)
+        if resource == "issue":
+            return await _handle_internal_issue(app, raw_body)
+        if resource == "error":
+            return await _handle_internal_error(app, raw_body)
         return Response(status_code=204)
 
     @app.get("/ide/events/stream")
@@ -135,7 +124,9 @@ def create_app(
                 while True:
                     try:
                         payload = await asyncio.wait_for(queue.get(), timeout=15.0)
-                        yield f"data: {payload}\n\n"
+                        envelope = json.loads(payload)
+                        inner_incident = envelope["incident"]["incident"]
+                        yield f"data: {json.dumps(inner_incident)}\n\n"
                     except TimeoutError:
                         yield ": keepalive\n\n"
 
@@ -145,6 +136,54 @@ def create_app(
                 await app.state.broker.unsubscribe(queue)
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    @app.get("/dashboard/events/stream")
+    async def dashboard_events_stream(request: Request) -> StreamingResponse:
+        dashboard_origin = _dashboard_origin(app.state.settings)
+
+        async def event_stream() -> AsyncIterator[str]:
+            for record in await app.state.store.list_incidents(status="all", limit=50):
+                body = record.model_dump_json(by_alias=True)
+                yield f"event: incident.created\ndata: {body}\n\n"
+
+            queue = await app.state.broker.subscribe()
+            try:
+                while True:
+                    try:
+                        payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                        envelope = json.loads(payload)
+                        event_name = envelope.get("type", "incident.created")
+                        body = json.dumps(envelope["incident"])
+                        yield f"event: {event_name}\ndata: {body}\n\n"
+                    except TimeoutError:
+                        yield ": heartbeat\n\n"
+
+                    if await request.is_disconnected():
+                        break
+            finally:
+                await app.state.broker.unsubscribe(queue)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "Access-Control-Allow-Origin": dashboard_origin,
+            },
+        )
+
+    @app.options("/dashboard/events/stream")
+    async def dashboard_events_stream_preflight() -> Response:
+        return Response(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": _dashboard_origin(app.state.settings),
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+            },
+        )
 
     @app.post("/ide/events/{incident_id}/ack", status_code=204)
     async def acknowledge_incident(incident_id: str, request: Request) -> Response:
@@ -185,7 +224,9 @@ def create_app(
         _verify_ide_request(request, settings_state)
         incident = payload.to_incident()
         await app.state.store.put_if_absent(incident)
-        await app.state.broker.publish(incident)
+        record = await app.state.store.get_record(incident.incident_id)
+        if record is not None:
+            await app.state.broker.publish(record, event_type="incident.created")
         return JSONResponse(incident.model_dump(mode="json", by_alias=True), status_code=201)
 
     return app
@@ -363,9 +404,9 @@ def _build_unified_diff(repo_relative_path: str, old_text: str, new_text: str) -
     return "\n".join(diff_lines)
 
 
-def _verify_sentry_request(request: Request, raw_body: bytes, settings: Settings) -> None:
+def _verify_sentry_request(request: Request, raw_body: bytes, settings: Settings) -> str:
     resource = request.headers.get("sentry-hook-resource")
-    if resource != "event_alert":
+    if resource not in _SUPPORTED_RESOURCES:
         raise HTTPException(status_code=400, detail="Unsupported Sentry webhook resource.")
 
     if not settings.sentry_webhook_secret:
@@ -377,6 +418,113 @@ def _verify_sentry_request(request: Request, raw_body: bytes, settings: Settings
     expected_signature = request.headers.get("sentry-hook-signature")
     if not _is_valid_signature(raw_body, expected_signature, settings.sentry_webhook_secret):
         raise HTTPException(status_code=401, detail="Invalid Sentry webhook signature.")
+    return resource
+
+
+async def _handle_event_alert(app: FastAPI, raw_body: bytes) -> Response:
+    try:
+        payload = IssueAlertWebhook.model_validate_json(raw_body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.") from exc
+
+    if payload.action != "triggered":
+        return Response(status_code=204)
+
+    try:
+        event_payload = await app.state.sentry_client.fetch_event(payload.data.event.url)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        logger.exception("Failed to fetch Sentry event details.")
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to fetch event details from Sentry.",
+        ) from exc
+
+    incident = normalize_sentry_event(payload, event_payload)
+    created = await app.state.store.put_if_absent(incident)
+    if created:
+        record = await app.state.store.get_record(incident.incident_id)
+        if record is not None:
+            await app.state.broker.publish(record, event_type="incident.created")
+    return Response(status_code=204)
+
+
+async def _handle_internal_issue(app: FastAPI, raw_body: bytes) -> Response:
+    try:
+        payload = InternalIssueWebhook.model_validate_json(raw_body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.") from exc
+
+    issue = payload.data.issue
+    if payload.action == "created":
+        event_payload = payload.data.event
+        if event_payload is None:
+            try:
+                event_payload = await app.state.sentry_client.fetch_issue(issue.id)
+            except RuntimeError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except httpx.HTTPError as exc:
+                logger.exception("Failed to fetch Sentry issue details.")
+                raise HTTPException(
+                    status_code=502,
+                    detail="Unable to fetch issue details from Sentry.",
+                ) from exc
+        incident = normalize_internal_issue_event(payload, event_payload)
+        created = await app.state.store.put_if_absent(incident)
+        if created:
+            record = await app.state.store.get_record(incident.incident_id)
+            if record is not None:
+                await app.state.broker.publish(record, event_type="incident.created")
+        return Response(status_code=204)
+
+    new_status = issue.status if payload.action != "assigned" else None
+    assignee = _extract_assignee(issue.assigned_to) if payload.action == "assigned" else None
+    updated = await app.state.store.update_sentry_status(
+        issue_id=str(issue.id),
+        sentry_status=new_status,
+        assignee=assignee,
+    )
+    if not updated:
+        logger.debug(
+            "Received %s for unknown issue_id=%s; ignoring.",
+            payload.action,
+            issue.id,
+        )
+        return Response(status_code=204)
+    for record in updated:
+        await app.state.broker.publish(record, event_type="incident.updated")
+    return Response(status_code=204)
+
+
+async def _handle_internal_error(app: FastAPI, raw_body: bytes) -> Response:
+    try:
+        payload = InternalErrorWebhook.model_validate_json(raw_body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.") from exc
+
+    incident = normalize_internal_error_event(payload)
+    created = await app.state.store.put_if_absent(incident)
+    if created:
+        record = await app.state.store.get_record(incident.incident_id)
+        if record is not None:
+            await app.state.broker.publish(record, event_type="incident.created")
+    return Response(status_code=204)
+
+
+def _extract_assignee(assigned_to: dict[str, Any] | None) -> str | None:
+    if not assigned_to:
+        return None
+    for key in ("name", "username", "email", "slug"):
+        value = assigned_to.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _dashboard_origin(settings: Settings) -> str:
+    configured = os.getenv("DASHBOARD_ORIGIN", "").strip()
+    return configured or _DEFAULT_DASHBOARD_ORIGIN
 
 
 def _verify_ide_request(request: Request, settings: Settings) -> None:

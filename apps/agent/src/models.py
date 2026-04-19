@@ -37,6 +37,41 @@ class IssueAlertWebhook(CamelModel):
     data: IssueAlertData
 
 
+class InternalIssue(CamelModel):
+    id: str
+    short_id: str | None = None
+    status: Literal["unresolved", "resolved", "ignored"] | None = None
+    assigned_to: dict[str, Any] | None = None
+    project: dict[str, Any] | None = None
+    web_url: str | None = None
+    permalink: str | None = None
+
+
+class InternalIssueData(CamelModel):
+    issue: InternalIssue
+    event: dict[str, Any] | None = None
+
+
+class InternalIssueWebhook(CamelModel):
+    action: Literal["created", "resolved", "unresolved", "ignored", "assigned"]
+    actor: dict[str, Any] | None = None
+    data: InternalIssueData
+    installation: dict[str, Any] | None = None
+
+
+class InternalErrorData(CamelModel):
+    event: dict[str, Any]
+    triggered_rule: str | None = None
+    issue: InternalIssue | None = None
+
+
+class InternalErrorWebhook(CamelModel):
+    action: str | None = "created"
+    actor: dict[str, Any] | None = None
+    data: InternalErrorData
+    installation: dict[str, Any] | None = None
+
+
 class NormalizedIncident(CamelModel):
     incident_id: str
     sentry_event_id: str
@@ -52,6 +87,8 @@ class NormalizedIncident(CamelModel):
     function_name: str | None = None
     code_context: str | None = None
     event_web_url: str
+    sentry_status: Literal["unresolved", "resolved", "ignored"] | None = "unresolved"
+    assignee: str | None = None
     received_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -174,6 +211,105 @@ def normalize_sentry_event(
             or webhook.data.event.web_url
         ),
     )
+
+
+def normalize_internal_issue_event(
+    webhook: InternalIssueWebhook,
+    event_payload: dict[str, Any],
+) -> NormalizedIncident:
+    issue = webhook.data.issue
+    incident = _normalize_event_payload(
+        event_payload=event_payload,
+        issue_id=str(issue.id),
+        fallback_web_url=issue.web_url or issue.permalink or "",
+    )
+    return incident.model_copy(
+        update={
+            "sentry_status": issue.status or "unresolved",
+            "assignee": _extract_assignee_name(issue.assigned_to),
+        }
+    )
+
+
+def normalize_internal_error_event(
+    webhook: InternalErrorWebhook,
+) -> NormalizedIncident:
+    event_payload = webhook.data.event
+    issue = webhook.data.issue
+    issue_id = str(issue.id) if issue else str(
+        event_payload.get("issue_id")
+        or event_payload.get("issueId")
+        or event_payload.get("groupID")
+        or ""
+    )
+    fallback_web_url = (
+        (issue.web_url or issue.permalink) if issue else None
+    ) or str(
+        event_payload.get("permalink")
+        or event_payload.get("web_url")
+        or ""
+    )
+    incident = _normalize_event_payload(
+        event_payload=event_payload,
+        issue_id=issue_id,
+        fallback_web_url=fallback_web_url,
+    )
+    if issue and issue.status:
+        incident = incident.model_copy(update={"sentry_status": issue.status})
+    return incident
+
+
+def _normalize_event_payload(
+    *,
+    event_payload: dict[str, Any],
+    issue_id: str,
+    fallback_web_url: str,
+) -> NormalizedIncident:
+    values = _extract_exception_values(event_payload)
+    exception = values[-1] if values else {}
+    frame = _select_primary_frame(exception)
+
+    event_id = str(
+        event_payload.get("eventID")
+        or event_payload.get("id")
+        or event_payload.get("event_id")
+        or ""
+    )
+    exception_type = str(exception.get("type") or "UnknownError")
+    exception_message = str(exception.get("value") or "Unknown Sentry error")
+    original_frame_path = _frame_value(frame, "filename", "abs_path", "absPath")
+    code_context = _frame_value(frame, "context_line", "contextLine")
+
+    return NormalizedIncident(
+        incident_id=event_id,
+        sentry_event_id=event_id,
+        issue_id=issue_id,
+        project_slug=_extract_project_slug(event_payload),
+        environment=_extract_environment(event_payload),
+        title=str(event_payload.get("title") or f"{exception_type}: {exception_message}"),
+        exception_type=exception_type,
+        exception_message=exception_message,
+        repo_relative_path=_normalize_repo_relative_path(original_frame_path),
+        original_frame_path=original_frame_path,
+        line_number=_coerce_int(frame.get("lineno") or frame.get("lineNo")),
+        function_name=_frame_value(frame, "function"),
+        code_context=code_context,
+        event_web_url=str(
+            event_payload.get("permalink")
+            or event_payload.get("web_url")
+            or fallback_web_url
+        ),
+    )
+
+
+def _extract_assignee_name(assigned_to: dict[str, Any] | None) -> str | None:
+    if not assigned_to:
+        return None
+    for key in ("name", "username", "email", "slug"):
+        value = assigned_to.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def _extract_exception_values(event_payload: dict[str, Any]) -> list[dict[str, Any]]:

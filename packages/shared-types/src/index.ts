@@ -1,3 +1,5 @@
+export type SentryResolutionStatus = "unresolved" | "resolved" | "ignored";
+
 export interface NormalizedIncident {
   incidentId: string;
   sentryEventId: string;
@@ -13,6 +15,8 @@ export interface NormalizedIncident {
   functionName: string | null;
   codeContext: string | null;
   eventWebUrl: string;
+  sentryStatus: SentryResolutionStatus | null;
+  assignee: string | null;
   receivedAt: string;
 }
 
@@ -35,6 +39,10 @@ export interface IncidentFeedResponse {
   summary: IncidentSummary;
   incidents: IncidentRecord[];
 }
+
+export type IncidentStreamEvent =
+  | { type: "incident.created"; incident: IncidentRecord }
+  | { type: "incident.updated"; incident: IncidentRecord };
 
 export interface AgentHealthResponse {
   status: string;

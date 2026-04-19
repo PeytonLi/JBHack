@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +31,23 @@ class IncidentStore:
                 )
                 """
             )
+            cursor = await db.execute("PRAGMA table_info(incidents)")
+            existing_cols = {row[1] for row in await cursor.fetchall()}
+            if "sentry_status" not in existing_cols:
+                await db.execute(
+                    "ALTER TABLE incidents ADD COLUMN sentry_status TEXT NOT NULL DEFAULT 'unresolved'"
+                )
+            if "assignee" not in existing_cols:
+                await db.execute("ALTER TABLE incidents ADD COLUMN assignee TEXT")
+            if "issue_id" not in existing_cols:
+                await db.execute("ALTER TABLE incidents ADD COLUMN issue_id TEXT")
+                await db.execute(
+                    "UPDATE incidents SET issue_id = json_extract(payload_json, '$.issueId') "
+                    "WHERE issue_id IS NULL"
+                )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_incidents_issue_id ON incidents(issue_id)"
+            )
             await db.commit()
 
     async def put_if_absent(self, incident: NormalizedIncident) -> bool:
@@ -40,16 +58,22 @@ class IncidentStore:
                     INSERT INTO incidents (
                         incident_id,
                         sentry_event_id,
+                        issue_id,
                         payload_json,
                         acknowledged,
-                        created_at
-                    ) VALUES (?, ?, ?, 0, ?)
+                        created_at,
+                        sentry_status,
+                        assignee
+                    ) VALUES (?, ?, ?, ?, 0, ?, ?, ?)
                     """,
                     (
                         incident.incident_id,
                         incident.sentry_event_id,
+                        incident.issue_id,
                         incident.model_dump_json(by_alias=True),
                         incident.received_at.isoformat(),
+                        incident.sentry_status or "unresolved",
+                        incident.assignee,
                     ),
                 )
                 await db.commit()
@@ -89,7 +113,8 @@ class IncidentStore:
         async with aiosqlite.connect(self._db_path) as db:
             cursor = await db.execute(
                 f"""
-                SELECT payload_json, acknowledged, created_at, acknowledged_at
+                SELECT payload_json, acknowledged, created_at, acknowledged_at,
+                       sentry_status, assignee
                 FROM incidents
                 {where_sql}
                 ORDER BY created_at DESC
@@ -100,16 +125,112 @@ class IncidentStore:
             rows = await cursor.fetchall()
 
         incidents: list[IncidentRecord] = []
-        for payload_json, acknowledged, created_at, acknowledged_at in rows:
+        for (
+            payload_json,
+            acknowledged,
+            created_at,
+            acknowledged_at,
+            sentry_status,
+            assignee,
+        ) in rows:
+            incident = NormalizedIncident.model_validate_json(payload_json)
+            incident = _hydrate_sentry_columns(incident, sentry_status, assignee)
             incidents.append(
                 IncidentRecord(
-                    incident=NormalizedIncident.model_validate_json(payload_json),
+                    incident=incident,
                     status="reviewed" if acknowledged else "open",
                     created_at=_parse_datetime(created_at),
                     reviewed_at=_parse_datetime(acknowledged_at),
                 )
             )
         return incidents
+
+    async def get_record(self, incident_id: str) -> IncidentRecord | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT payload_json, acknowledged, created_at, acknowledged_at,
+                       sentry_status, assignee
+                FROM incidents
+                WHERE incident_id = ?
+                """,
+                (incident_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        (
+            payload_json,
+            acknowledged,
+            created_at,
+            acknowledged_at,
+            sentry_status,
+            assignee,
+        ) = row
+        incident = NormalizedIncident.model_validate_json(payload_json)
+        incident = _hydrate_sentry_columns(incident, sentry_status, assignee)
+        return IncidentRecord(
+            incident=incident,
+            status="reviewed" if acknowledged else "open",
+            created_at=_parse_datetime(created_at),
+            reviewed_at=_parse_datetime(acknowledged_at),
+        )
+
+    async def update_sentry_status(
+        self,
+        *,
+        issue_id: str,
+        sentry_status: Literal["unresolved", "resolved", "ignored"] | None = None,
+        assignee: str | None = None,
+    ) -> list[IncidentRecord]:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT incident_id, payload_json, sentry_status, assignee
+                FROM incidents
+                WHERE issue_id = ?
+                """,
+                (issue_id,),
+            )
+            rows = await cursor.fetchall()
+            if not rows:
+                return []
+
+            updated_ids: list[str] = []
+            for incident_id, payload_json, current_status, current_assignee in rows:
+                new_status = sentry_status or current_status or "unresolved"
+                new_assignee = assignee if assignee is not None else current_assignee
+                incident = NormalizedIncident.model_validate_json(payload_json)
+                incident = incident.model_copy(
+                    update={
+                        "sentry_status": new_status,
+                        "assignee": new_assignee,
+                    }
+                )
+                await db.execute(
+                    """
+                    UPDATE incidents
+                    SET sentry_status = ?,
+                        assignee = ?,
+                        payload_json = ?
+                    WHERE incident_id = ?
+                    """,
+                    (
+                        new_status,
+                        new_assignee,
+                        incident.model_dump_json(by_alias=True),
+                        incident_id,
+                    ),
+                )
+                updated_ids.append(incident_id)
+            await db.commit()
+
+        updated: list[IncidentRecord] = []
+        for incident_id in updated_ids:
+            record = await self.get_record(incident_id)
+            if record is not None:
+                updated.append(record)
+        return updated
 
     async def get_summary(self) -> IncidentSummary:
         async with aiosqlite.connect(self._db_path) as db:
@@ -175,12 +296,36 @@ class IncidentBroker:
         async with self._lock:
             self._subscribers.discard(queue)
 
-    async def publish(self, incident: NormalizedIncident) -> None:
-        payload = incident.model_dump_json(by_alias=True)
+    async def publish(
+        self,
+        record: IncidentRecord,
+        *,
+        event_type: Literal["incident.created", "incident.updated"] = "incident.created",
+    ) -> None:
+        envelope = {
+            "type": event_type,
+            "incident": json.loads(record.model_dump_json(by_alias=True)),
+        }
+        payload = json.dumps(envelope)
         async with self._lock:
             subscribers = list(self._subscribers)
         for queue in subscribers:
             queue.put_nowait(payload)
+
+
+def _hydrate_sentry_columns(
+    incident: NormalizedIncident,
+    sentry_status: str | None,
+    assignee: str | None,
+) -> NormalizedIncident:
+    updates: dict[str, object] = {}
+    if sentry_status and not incident.sentry_status:
+        updates["sentry_status"] = sentry_status
+    elif sentry_status and incident.sentry_status != sentry_status:
+        updates["sentry_status"] = sentry_status
+    if assignee and incident.assignee is None:
+        updates["assignee"] = assignee
+    return incident.model_copy(update=updates) if updates else incident
 
 
 def _parse_datetime(raw_value: str | None) -> datetime | None:

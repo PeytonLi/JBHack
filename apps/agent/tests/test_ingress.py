@@ -59,6 +59,7 @@ async def test_signed_webhook_persists_and_acknowledges_incident(app) -> None:
         incidents = await app.state.store.list_unreviewed()
         assert len(incidents) == 1
         assert incidents[0].repo_relative_path == "apps/target/src/main.py"
+        assert incidents[0].sentry_status == "unresolved"
 
         feed_response = await client.get("/incidents?status=all")
         assert feed_response.status_code == 200
@@ -67,6 +68,7 @@ async def test_signed_webhook_persists_and_acknowledges_incident(app) -> None:
         assert feed["summary"]["reviewedCount"] == 0
         assert len(feed["incidents"]) == 1
         assert feed["incidents"][0]["status"] == "open"
+        assert feed["incidents"][0]["incident"]["sentryStatus"] == "unresolved"
 
         ack_response = await client.post(
             f"/ide/events/{incidents[0].incident_id}/review",

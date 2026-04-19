@@ -10,6 +10,13 @@ class SentryEventClient:
         self._auth_token = auth_token
 
     async def fetch_event(self, event_url: str) -> dict[str, Any]:
+        return await self._get(event_url)
+
+    async def fetch_issue(self, issue_id: str) -> dict[str, Any]:
+        url = f"https://sentry.io/api/0/issues/{issue_id}/events/latest/"
+        return await self._get(url)
+
+    async def _get(self, url: str) -> dict[str, Any]:
         if not self._auth_token:
             msg = "SENTRY_AUTH_TOKEN is required to fetch full event details."
             raise RuntimeError(msg)
@@ -19,6 +26,6 @@ class SentryEventClient:
             "Accept": "application/json",
         }
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            response = await client.get(event_url, headers=headers)
+            response = await client.get(url, headers=headers)
             response.raise_for_status()
             return response.json()
