@@ -1,4 +1,5 @@
-# SecureLoop
+<div align="center">
+**SecureLoop**
 
 <div align="center">
 
