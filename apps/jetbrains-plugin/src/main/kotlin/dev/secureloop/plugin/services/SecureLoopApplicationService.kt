@@ -6,6 +6,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import dev.secureloop.plugin.model.AgentConnectionState
 import dev.secureloop.plugin.model.AgentHealthResponse
+import dev.secureloop.plugin.model.AgentStatusResponse
 import dev.secureloop.plugin.model.AnalyzeIncidentRequest
 import dev.secureloop.plugin.model.AnalyzeIncidentResponse
 import dev.secureloop.plugin.model.NavigateRequest
@@ -88,11 +89,14 @@ class SecureLoopApplicationService : Disposable {
                 return@executeOnPooledThread
             }
 
+            val autopilot = (connectionState as? AgentConnectionState.Connected)?.autopilotEnabled ?: false
+
             if (!health.allowDebugEndpoints) {
                 publishConnectionState(
                     AgentConnectionState.Connected(
                         baseUrl = agentBaseUrl(),
                         demoModeAvailable = false,
+                        autopilotEnabled = autopilot,
                     ),
                 )
                 return@executeOnPooledThread
@@ -112,6 +116,7 @@ class SecureLoopApplicationService : Disposable {
                             AgentConnectionState.Connected(
                                 baseUrl = agentBaseUrl(),
                                 demoModeAvailable = true,
+                                autopilotEnabled = autopilot,
                             ),
                         )
                     }
@@ -129,6 +134,7 @@ class SecureLoopApplicationService : Disposable {
                             AgentConnectionState.Connected(
                                 baseUrl = agentBaseUrl(),
                                 demoModeAvailable = false,
+                                autopilotEnabled = autopilot,
                             ),
                         )
                     }
@@ -444,10 +450,29 @@ class SecureLoopApplicationService : Disposable {
             )
         }
 
+        val status = fetchAgentStatus()
         return AgentConnectionState.Connected(
             baseUrl = agentBaseUrl(),
             demoModeAvailable = health.allowDebugEndpoints,
+            autopilotEnabled = status?.autopilotEnabled ?: false,
         )
+    }
+
+    private fun fetchAgentStatus(): AgentStatusResponse? {
+        return try {
+            val request = HttpRequest.newBuilder(URI.create("${agentBaseUrl()}/status"))
+                .header("Accept", "application/json")
+                .timeout(Duration.ofSeconds(5))
+                .GET()
+                .build()
+            val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() != 200) {
+                return null
+            }
+            json.decodeFromString<AgentStatusResponse>(response.body())
+        } catch (exception: Exception) {
+            null
+        }
     }
 
     private fun fetchHealth(): AgentHealthResponse? {

@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 import { IncidentStream } from "./incident-stream";
 import type {
   AgentHealthResponse,
+  AgentStatusResponse,
   DeleteIncidentsResponse,
   IncidentFeedResponse,
   IncidentRecord,
@@ -54,6 +55,7 @@ const scaleIn = {
 type DashboardData = {
   health: AgentHealthResponse | null;
   feed: IncidentFeedResponse | null;
+  status: AgentStatusResponse | null;
   error: string | null;
 };
 
@@ -61,6 +63,7 @@ export default function Home() {
   const [data, setData] = useState<DashboardData>({
     health: null,
     feed: null,
+    status: null,
     error: null,
   });
   const [loading, setLoading] = useState(true);
@@ -69,12 +72,16 @@ export default function Home() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [healthRes, feedRes] = await Promise.all([
+      const [healthRes, feedRes, statusRes] = await Promise.all([
         fetch(`${agentBaseUrl}/health`, {
           cache: "no-store",
           headers: { Accept: "application/json" },
         }),
         fetch(`${agentBaseUrl}/incidents?status=all&limit=40`, {
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        }),
+        fetch(`${agentBaseUrl}/status`, {
           cache: "no-store",
           headers: { Accept: "application/json" },
         }),
@@ -84,12 +91,16 @@ export default function Home() {
         setData({
           health: null,
           feed: null,
+          status: null,
           error: `Agent responded with HTTP ${healthRes.status}/${feedRes.status}`,
         });
       } else {
         setData({
           health: (await healthRes.json()) as AgentHealthResponse,
           feed: (await feedRes.json()) as IncidentFeedResponse,
+          status: statusRes.ok
+            ? ((await statusRes.json()) as AgentStatusResponse)
+            : null,
           error: null,
         });
       }
@@ -97,6 +108,7 @@ export default function Home() {
       setData({
         health: null,
         feed: null,
+        status: null,
         error: "Cannot reach SecureLoop agent — start `pnpm dev` first.",
       });
     } finally {
@@ -140,7 +152,8 @@ export default function Home() {
     [fetchData],
   );
 
-  const { health, feed, error } = data;
+  const { health, feed, status, error } = data;
+  const autopilotEnabled = Boolean(status?.autopilotEnabled);
 
   // Compute live stats from the records (SSE-updated)
   const openCount = liveRecords.filter((r) => r.status === "open").length;
@@ -425,6 +438,7 @@ export default function Home() {
         <IncidentStream
           initialFeed={feed}
           agentBaseUrl={agentBaseUrl}
+          autopilotEnabled={autopilotEnabled}
           onRecordsChange={setLiveRecords}
         />
       </div>

@@ -21,6 +21,12 @@ class Settings:
     ide_token_file: Path
     ide_token: str
     agent_port: int
+    github_token: str | None = None
+    github_repo: str | None = None
+    openai_api_key: str | None = None
+
+    def autopilot_enabled(self) -> bool:
+        return bool(self.github_token) and bool(self.github_repo) and bool(self.openai_api_key)
 
 
 def load_settings() -> Settings:
@@ -42,6 +48,9 @@ def load_settings() -> Settings:
         ide_token_file=ide_token_file,
         ide_token=ide_token,
         agent_port=int(os.getenv("AGENT_PORT", "8001")),
+        github_token=os.getenv("GITHUB_TOKEN") or None,
+        github_repo=os.getenv("GITHUB_REPO") or None,
+        openai_api_key=os.getenv("OPENAI_API_KEY") or None,
     )
 
 

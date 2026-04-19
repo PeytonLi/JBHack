@@ -16,11 +16,28 @@ logger = logging.getLogger("secureloop.agent.dep_check")
 _ADVISORY_URL = "https://pypi.org/security/"
 
 
+def repo_has_python_manifest(repo_root: Path) -> bool:
+    if (repo_root / "pyproject.toml").exists():
+        return True
+    if (repo_root / "requirements.txt").exists():
+        return True
+    try:
+        for entry in repo_root.iterdir():
+            if entry.is_file() and entry.name.startswith("requirements-") and entry.name.endswith(".txt"):
+                return True
+    except (FileNotFoundError, PermissionError):
+        return False
+    return False
+
+
 async def run_pip_audit(
     repo_root: Path,
     target_requirements: Path | None,
     timeout_s: float = 30.0,
 ) -> DepCheckResult | None:
+    if not repo_has_python_manifest(repo_root):
+        return None
+
     binary = os.environ.get("SECURELOOP_PIP_AUDIT_BIN") or shutil.which("pip-audit")
     if not binary:
         return None

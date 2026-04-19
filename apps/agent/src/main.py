@@ -17,6 +17,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pathlib import Path
 from pydantic import ValidationError
 
+from .autopilot import run_autopilot
+from .codex_client import codex_available
 from .config import Settings, load_settings
 from .github_client import (
     GitHubClient,
@@ -56,7 +58,14 @@ ANALYZE_MODULE_CANDIDATES = (
     "src.codex_analysis",
 )
 _SUPPORTED_RESOURCES = {"event_alert", "issue", "error"}
-_DASHBOARD_FORWARDED_TYPES = {"incident.created", "incident.updated"}
+_DASHBOARD_FORWARDED_TYPES = {
+    "incident.created",
+    "incident.updated",
+    "pipeline.step",
+    "pipeline.completed",
+    "pipeline.failed",
+}
+_PIPELINE_EVENT_TYPES = {"pipeline.step", "pipeline.completed", "pipeline.failed"}
 _DEFAULT_DASHBOARD_ORIGIN = "http://localhost:3000"
 _PR_ARTIFACTS_ROOT = Path(__file__).resolve().parents[1] / "out"
 
@@ -89,6 +98,20 @@ def create_app(
     app.state.store = store
     app.state.broker = broker
     app.state.sentry_client = client
+    app.state.autopilot_locks = {}
+
+    @app.get("/status")
+    async def status() -> JSONResponse:
+        settings_state: Settings = app.state.settings
+        dashboard_origin = _dashboard_origin(settings_state)
+        return JSONResponse(
+            {
+                "autopilotEnabled": settings_state.autopilot_enabled(),
+                "githubRepo": settings_state.github_repo,
+                "codexAvailable": codex_available(),
+            },
+            headers={"Access-Control-Allow-Origin": dashboard_origin},
+        )
 
     @app.get("/health")
     async def health() -> JSONResponse:
@@ -114,6 +137,17 @@ def create_app(
         incidents = await app.state.store.list_incidents(status=status, limit=limit)
         summary = await app.state.store.get_summary()
         return IncidentFeedResponse(summary=summary, incidents=incidents)
+
+    @app.get("/incidents/{incident_id}")
+    async def get_incident(incident_id: str) -> JSONResponse:
+        dashboard_origin = _dashboard_origin(app.state.settings)
+        record = await app.state.store.get_record(incident_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Incident not found.")
+        return JSONResponse(
+            record.model_dump(mode="json", by_alias=True),
+            headers={"Access-Control-Allow-Origin": dashboard_origin},
+        )
 
     @app.delete("/incidents")
     async def delete_incidents(
@@ -212,6 +246,10 @@ def create_app(
                             body = json.dumps(envelope["cleared"])
                             yield f"event: incidents.cleared\ndata: {body}\n\n"
                             continue
+                        if event_name in _PIPELINE_EVENT_TYPES:
+                            body = json.dumps(envelope["pipeline"])
+                            yield f"event: {event_name}\ndata: {body}\n\n"
+                            continue
                         if event_name not in _DASHBOARD_FORWARDED_TYPES:
                             continue
                         body = json.dumps(envelope["incident"])
@@ -307,14 +345,38 @@ def create_app(
         payload: AnalyzeIncidentRequest | None = Body(default=None),
     ) -> AnalyzeIncidentResponse:
         _verify_ide_request(request, app.state.settings)
+        if app.state.settings.autopilot_enabled():
+            raise HTTPException(
+                status_code=409,
+                detail="autopilot owns this pipeline; manual IDE flow disabled",
+            )
         if payload is None:
             logger.warning("Received empty /ide/analyze body; using deterministic demo analysis payload.")
             payload = _build_demo_analysis_request()
-        analysis = await _resolve_analysis(payload)
+        broker = app.state.broker
+        await broker.publish_pipeline(
+            incident_id=payload.incident_id,
+            event_type="pipeline.step",
+            payload={"step": "analyzing", "status": "running"},
+        )
+        try:
+            analysis = await _resolve_analysis(payload)
+        except Exception as exc:
+            await broker.publish_pipeline(
+                incident_id=payload.incident_id,
+                event_type="pipeline.failed",
+                payload={"step": "analyzing", "status": "failed", "error": str(exc)},
+            )
+            raise
         try:
             await app.state.store.put_analysis(payload.incident_id, analysis)
         except Exception:
             logger.exception("Failed to persist analysis for incident %s.", payload.incident_id)
+        await broker.publish_pipeline(
+            incident_id=payload.incident_id,
+            event_type="pipeline.step",
+            payload={"step": "analyzing", "status": "completed"},
+        )
         return analysis
 
     @app.post("/ide/events/{incident_id}/open-pr")
@@ -324,40 +386,65 @@ def create_app(
         payload: OpenPrRequest = Body(...),
     ) -> PullRequestResult:
         _verify_ide_request(request, app.state.settings)
+        if app.state.settings.autopilot_enabled():
+            raise HTTPException(
+                status_code=409,
+                detail="autopilot owns this pipeline; manual IDE flow disabled",
+            )
         analysis = await app.state.store.get_analysis(incident_id)
         if analysis is None:
             raise HTTPException(
                 status_code=404,
                 detail="no analysis stored for incident",
             )
+        broker = app.state.broker
+        await broker.publish_pipeline(
+            incident_id=incident_id,
+            event_type="pipeline.step",
+            payload={"step": "pr_opening", "status": "running"},
+        )
         relative_path = payload.relative_path or analysis.patch.repo_relative_path
         token = os.environ.get("GITHUB_TOKEN")
         repo = os.environ.get("GITHUB_REPO")
         if not token or not repo:
-            return _write_local_artifacts(
+            result = _write_local_artifacts(
                 incident_id=incident_id,
                 analysis=analysis,
                 relative_path=relative_path,
                 updated_file_content=payload.updated_file_content,
                 error="GITHUB_TOKEN or GITHUB_REPO not configured.",
             )
-        try:
-            client = GitHubClient(token, repo)
-            return client.open_pr_for_incident(
+        else:
+            try:
+                client = GitHubClient(token, repo)
+                result = client.open_pr_for_incident(
+                    incident_id=incident_id,
+                    analysis=analysis,
+                    relative_path=relative_path,
+                    updated_file_content=payload.updated_file_content,
+                )
+            except Exception as exc:
+                logger.exception("PR creation failed; writing local artifacts.")
+                result = _write_local_artifacts(
+                    incident_id=incident_id,
+                    analysis=analysis,
+                    relative_path=relative_path,
+                    updated_file_content=payload.updated_file_content,
+                    error=str(exc),
+                )
+        if result.error:
+            await broker.publish_pipeline(
                 incident_id=incident_id,
-                analysis=analysis,
-                relative_path=relative_path,
-                updated_file_content=payload.updated_file_content,
+                event_type="pipeline.failed",
+                payload={"step": "pr_opening", "status": "failed", "error": result.error},
             )
-        except Exception as exc:
-            logger.exception("PR creation failed; writing local artifacts.")
-            return _write_local_artifacts(
+        else:
+            await broker.publish_pipeline(
                 incident_id=incident_id,
-                analysis=analysis,
-                relative_path=relative_path,
-                updated_file_content=payload.updated_file_content,
-                error=str(exc),
+                event_type="pipeline.step",
+                payload={"step": "pr_opening", "status": "completed", "prUrl": result.pr_url},
             )
+        return result
 
     @app.post("/debug/incidents", status_code=201)
     async def create_debug_incident(
@@ -593,6 +680,7 @@ async def _handle_event_alert(app: FastAPI, raw_body: bytes) -> Response:
         record = await app.state.store.get_record(incident.incident_id)
         if record is not None:
             await app.state.broker.publish(record, event_type="incident.created")
+            _schedule_autopilot(app, incident.incident_id)
     return Response(status_code=204)
 
 
@@ -622,6 +710,7 @@ async def _handle_internal_issue(app: FastAPI, raw_body: bytes) -> Response:
             record = await app.state.store.get_record(incident.incident_id)
             if record is not None:
                 await app.state.broker.publish(record, event_type="incident.created")
+                _schedule_autopilot(app, incident.incident_id)
         return Response(status_code=204)
 
     new_status = issue.status if payload.action != "assigned" else None
@@ -655,7 +744,15 @@ async def _handle_internal_error(app: FastAPI, raw_body: bytes) -> Response:
         record = await app.state.store.get_record(incident.incident_id)
         if record is not None:
             await app.state.broker.publish(record, event_type="incident.created")
+            _schedule_autopilot(app, incident.incident_id)
     return Response(status_code=204)
+
+
+def _schedule_autopilot(app: FastAPI, incident_id: str) -> None:
+    settings: Settings = app.state.settings
+    if not settings.autopilot_enabled():
+        return
+    asyncio.create_task(run_autopilot(app, incident_id))
 
 
 def _extract_assignee(assigned_to: dict[str, Any] | None) -> str | None:

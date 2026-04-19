@@ -197,6 +197,12 @@ class SecureLoopToolWindowPanel(
         if (presentation == null) {
             detailArea.text = onboardingMessage()
             badgeLabel.text = ""
+            val autopilotOff = (connectionState as? AgentConnectionState.Connected)?.autopilotEnabled != true
+            analyzeButton.isVisible = autopilotOff
+            approveFixButton.isVisible = autopilotOff
+            showDiffButton.isVisible = autopilotOff
+            openPrButton.isVisible = autopilotOff
+            rejectButton.isVisible = autopilotOff
             openFileButton.isEnabled = false
             analyzeButton.isEnabled = false
             approveFixButton.isEnabled = false
@@ -241,11 +247,18 @@ class SecureLoopToolWindowPanel(
         }
 
         val resolved = presentation.resolution is ResolutionState.Resolved
-        val connected = connectionState is AgentConnectionState.Connected
+        val state = connectionState
+        val connected = state is AgentConnectionState.Connected
+        val autopilot = state is AgentConnectionState.Connected && state.autopilotEnabled
         val analyzing = presentation.analysisState == AnalysisState.Loading
         val applying = presentation.analysisState == AnalysisState.Applying
         openSentryButton.isEnabled = presentation.incident.eventWebUrl.startsWith("http")
         openFileButton.isEnabled = resolved
+        analyzeButton.isVisible = !autopilot
+        approveFixButton.isVisible = !autopilot
+        showDiffButton.isVisible = !autopilot
+        openPrButton.isVisible = !autopilot
+        rejectButton.isVisible = !autopilot
         analyzeButton.isEnabled = resolved && connected && !analyzing && !applying
         approveFixButton.isEnabled = resolved &&
             presentation.analysis != null &&
@@ -316,7 +329,9 @@ class SecureLoopToolWindowPanel(
                         "SecureLoop is connecting to the local companion service."
 
                     is AgentConnectionState.Connected -> {
-                        if (state.demoModeAvailable) {
+                        if (state.autopilotEnabled) {
+                            "Autopilot is running. When Sentry fires, SecureLoop will open a pull request automatically — no manual Analyze/Open-PR step required."
+                        } else if (state.demoModeAvailable) {
                             "Demo mode is ready. Click Run Demo to load a sample incident or Scan Current File to analyze the active editor."
                         } else {
                             "The local agent is connected. Scan Current File is available, but Run Demo is disabled until SECURE_LOOP_ALLOW_DEBUG_ENDPOINTS=1 is enabled."
@@ -339,7 +354,11 @@ class SecureLoopToolWindowPanel(
 
         return when (val state = connectionState) {
             AgentConnectionState.Connecting -> "Connecting to local agent"
-            is AgentConnectionState.Connected -> if (state.demoModeAvailable) "Demo ready" else "Connected to local agent"
+            is AgentConnectionState.Connected -> when {
+                state.autopilotEnabled -> "Autopilot active"
+                state.demoModeAvailable -> "Demo ready"
+                else -> "Connected to local agent"
+            }
             is AgentConnectionState.WaitingForAgent -> "Waiting for local agent"
             is AgentConnectionState.Unauthorized -> "Agent authorization failed"
         }
@@ -365,7 +384,9 @@ class SecureLoopToolWindowPanel(
 
                 is AgentConnectionState.Connected -> {
                     append("Connected to ${state.baseUrl}.")
-                    if (state.demoModeAvailable) {
+                    if (state.autopilotEnabled) {
+                        append(" Autopilot is running — PRs will appear automatically. Manual Analyze/Open-PR actions are disabled.")
+                    } else if (state.demoModeAvailable) {
                         append(" Run Demo will load a sample incident into the tool window. Scan Current File will analyze the active editor.")
                     } else {
                         append(" Scan Current File is still available. Run Demo is off until SECURE_LOOP_ALLOW_DEBUG_ENDPOINTS=1 is enabled.")

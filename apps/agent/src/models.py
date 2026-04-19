@@ -233,6 +233,14 @@ def normalize_sentry_event(
     original_frame_path = _frame_value(frame, "filename", "abs_path", "absPath")
     code_context = _frame_value(frame, "context_line", "contextLine")
 
+    extra = _extract_secureloop_extra(event_payload)
+    repo_relative_path = extra.get("repo_relative_path") or _normalize_repo_relative_path(
+        original_frame_path
+    )
+    line_number = extra.get("source_line") or _coerce_int(
+        frame.get("lineno") or frame.get("lineNo")
+    )
+
     return NormalizedIncident(
         incident_id=event_id,
         sentry_event_id=event_id,
@@ -242,9 +250,9 @@ def normalize_sentry_event(
         title=str(event_payload.get("title") or f"{exception_type}: {exception_message}"),
         exception_type=exception_type,
         exception_message=exception_message,
-        repo_relative_path=_normalize_repo_relative_path(original_frame_path),
+        repo_relative_path=repo_relative_path,
         original_frame_path=original_frame_path,
-        line_number=_coerce_int(frame.get("lineno") or frame.get("lineNo")),
+        line_number=line_number,
         function_name=_frame_value(frame, "function"),
         code_context=code_context,
         event_web_url=str(
@@ -322,6 +330,14 @@ def _normalize_event_payload(
     original_frame_path = _frame_value(frame, "filename", "abs_path", "absPath")
     code_context = _frame_value(frame, "context_line", "contextLine")
 
+    extra = _extract_secureloop_extra(event_payload)
+    repo_relative_path = extra.get("repo_relative_path") or _normalize_repo_relative_path(
+        original_frame_path
+    )
+    line_number = extra.get("source_line") or _coerce_int(
+        frame.get("lineno") or frame.get("lineNo")
+    )
+
     return NormalizedIncident(
         incident_id=event_id,
         sentry_event_id=event_id,
@@ -331,9 +347,9 @@ def _normalize_event_payload(
         title=str(event_payload.get("title") or f"{exception_type}: {exception_message}"),
         exception_type=exception_type,
         exception_message=exception_message,
-        repo_relative_path=_normalize_repo_relative_path(original_frame_path),
+        repo_relative_path=repo_relative_path,
         original_frame_path=original_frame_path,
-        line_number=_coerce_int(frame.get("lineno") or frame.get("lineNo")),
+        line_number=line_number,
         function_name=_frame_value(frame, "function"),
         code_context=code_context,
         event_web_url=str(
@@ -342,6 +358,37 @@ def _normalize_event_payload(
             or fallback_web_url
         ),
     )
+
+
+def _extract_secureloop_extra(event_payload: dict[str, Any]) -> dict[str, Any]:
+    candidate: Any = None
+    extra = event_payload.get("extra")
+    if isinstance(extra, dict):
+        candidate = extra.get("secureloop")
+    if not isinstance(candidate, dict):
+        contexts = event_payload.get("contexts")
+        if isinstance(contexts, dict):
+            candidate = contexts.get("secureloop")
+    if not isinstance(candidate, dict):
+        return {}
+
+    result: dict[str, Any] = {}
+    repo_relative_path = candidate.get("repo_relative_path") or candidate.get("repoRelativePath")
+    if isinstance(repo_relative_path, str) and repo_relative_path.strip():
+        result["repo_relative_path"] = _normalize_repo_relative_path(repo_relative_path)
+    source_line = _coerce_int(candidate.get("source_line") or candidate.get("sourceLine"))
+    if source_line is not None:
+        result["source_line"] = source_line
+    cwe_hint = candidate.get("cwe_hint") or candidate.get("cweHint")
+    if isinstance(cwe_hint, str) and cwe_hint.strip():
+        result["cwe_hint"] = cwe_hint.strip()
+    scenario_id = candidate.get("scenario_id") or candidate.get("scenarioId")
+    if isinstance(scenario_id, str) and scenario_id.strip():
+        result["scenario_id"] = scenario_id.strip()
+    route_path = candidate.get("route_path") or candidate.get("routePath")
+    if isinstance(route_path, str) and route_path.strip():
+        result["route_path"] = route_path.strip()
+    return result
 
 
 def _extract_assignee_name(assigned_to: dict[str, Any] | None) -> str | None:

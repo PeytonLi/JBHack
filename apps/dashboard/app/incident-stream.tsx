@@ -6,29 +6,47 @@ import {
   CheckCircle2,
   Clock,
   Code2,
+  Download,
   ExternalLink,
   Eye,
   FileCode2,
   FunctionSquare,
+  GitPullRequest,
+  Loader2,
   MapPin,
   Radio,
+  Search,
   ShieldAlert,
   ShieldCheck,
   ShieldOff,
+  XCircle,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type {
   IncidentFeedResponse,
   IncidentRecord,
   IncidentsClearedEvent,
   NavigateResponse,
+  AutopilotCompletedEvent,
+  AutopilotFailedEvent,
+  AutopilotStatus,
+  AutopilotStepId,
+  AutopilotStepEvent,
+  PipelineStep,
+  PipelineStepEvent,
   SentryResolutionStatus,
 } from "./types";
+import {
+  CompactPipelineBar,
+  derivePipelineSteps,
+} from "./pipeline-progress";
 
 /* ── Props ─────────────────────────────────────────────── */
 type Props = {
   initialFeed: IncidentFeedResponse | null;
   agentBaseUrl: string;
+  autopilotEnabled?: boolean;
   onRecordsChange?: (records: IncidentRecord[]) => void;
 };
 
@@ -153,12 +171,21 @@ const fadeIn = {
 type ToastKind = "success" | "info" | "error";
 type ToastState = { message: string; kind: ToastKind } | null;
 
-export function IncidentStream({ initialFeed, agentBaseUrl, onRecordsChange }: Props) {
+export function IncidentStream({
+  initialFeed,
+  agentBaseUrl,
+  autopilotEnabled = false,
+  onRecordsChange,
+}: Props) {
   const [records, setRecords] = useState<IncidentRecord[]>(
     initialFeed?.incidents ?? [],
   );
   const [connected, setConnected] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);
+  const [pipelines, setPipelines] = useState<Record<string, AutopilotStatus>>({});
+  const [pipelineEvents, setPipelineEvents] = useState<
+    Record<string, PipelineStepEvent[]>
+  >({});
 
   // Notify parent of record changes for live stat updates
   useEffect(() => {
@@ -215,11 +242,79 @@ export function IncidentStream({ initialFeed, agentBaseUrl, onRecordsChange }: P
         setRecords((prev) =>
           prev.filter((r) => !removed.has(r.incident.incidentId)),
         );
+        setPipelines((prev) => {
+          const next = { ...prev };
+          for (const id of removed) delete next[id];
+          return next;
+        });
       } catch {
         // Ignore malformed frames; a refresh will resync.
       }
     };
     source.addEventListener("incidents.cleared", handleCleared);
+    const handlePipelineStep = (evt: MessageEvent) => {
+      try {
+        const data = JSON.parse(evt.data) as AutopilotStepEvent;
+        if (!isAutopilotStepId(data.step)) return;
+        setPipelines((prev) => ({
+          ...prev,
+          [data.incidentId]: { phase: "running", step: data.step },
+        }));
+      } catch {
+        // ignore
+      }
+    };
+    const handlePipelineCompleted = (evt: MessageEvent) => {
+      try {
+        const data = JSON.parse(evt.data) as AutopilotCompletedEvent;
+        setPipelines((prev) => ({
+          ...prev,
+          [data.incidentId]: {
+            phase: "completed",
+            prUrl: data.prUrl,
+            prNumber: data.prNumber,
+            branch: data.branch,
+          },
+        }));
+      } catch {
+        // ignore
+      }
+    };
+    const handlePipelineFailed = (evt: MessageEvent) => {
+      try {
+        const data = JSON.parse(evt.data) as AutopilotFailedEvent;
+        setPipelines((prev) => ({
+          ...prev,
+          [data.incidentId]: {
+            phase: "failed",
+            reason: data.reason,
+            path: data.path,
+          },
+        }));
+      } catch {
+        // ignore
+      }
+    };
+    source.addEventListener("pipeline.step", handlePipelineStep);
+    source.addEventListener("pipeline.completed", handlePipelineCompleted);
+    source.addEventListener("pipeline.failed", handlePipelineFailed);
+    const handlePipelineProgress = (evt: MessageEvent) => {
+      try {
+        const ev = JSON.parse(evt.data) as PipelineStepEvent;
+        if (!ev || typeof ev.step !== "string" || typeof ev.status !== "string") {
+          return;
+        }
+        setPipelineEvents((prev) => ({
+          ...prev,
+          [ev.incidentId]: [...(prev[ev.incidentId] ?? []), ev],
+        }));
+      } catch {
+        // ignore
+      }
+    };
+    source.addEventListener("pipeline.step", handlePipelineProgress);
+    source.addEventListener("pipeline.completed", handlePipelineProgress);
+    source.addEventListener("pipeline.failed", handlePipelineProgress);
     return () => source.close();
   }, [agentBaseUrl]);
 
@@ -268,6 +363,12 @@ export function IncidentStream({ initialFeed, agentBaseUrl, onRecordsChange }: P
               <IncidentCard
                 key={record.incident.incidentId}
                 record={record}
+                pipeline={pipelines[record.incident.incidentId]}
+                steps={derivePipelineSteps(
+                  record,
+                  pipelineEvents[record.incident.incidentId] ?? [],
+                )}
+                autopilotEnabled={autopilotEnabled}
                 onOpenInIde={openInIde}
               />
             ))
@@ -320,6 +421,12 @@ export function IncidentStream({ initialFeed, agentBaseUrl, onRecordsChange }: P
               <IncidentCard
                 key={record.incident.incidentId}
                 record={record}
+                pipeline={pipelines[record.incident.incidentId]}
+                steps={derivePipelineSteps(
+                  record,
+                  pipelineEvents[record.incident.incidentId] ?? [],
+                )}
+                autopilotEnabled={autopilotEnabled}
                 onOpenInIde={openInIde}
               />
             ))
@@ -391,9 +498,15 @@ function LiveIndicator({ connected }: { connected: boolean }) {
 /* ── Incident card ─────────────────────────────────────── */
 function IncidentCard({
   record,
+  pipeline,
+  steps,
+  autopilotEnabled = false,
   onOpenInIde,
 }: {
   record: IncidentRecord;
+  pipeline?: AutopilotStatus;
+  steps: PipelineStep[];
+  autopilotEnabled?: boolean;
   onOpenInIde?: (incidentId: string) => void;
 }) {
   const location = [
@@ -442,39 +555,51 @@ function IncidentCard({
 
           {/* Title */}
           <h3 className="text-lg font-bold text-white leading-snug tracking-tight">
-            <span className="text-slate-400 font-semibold">
-              {record.incident.exceptionType}
-            </span>
-            <span className="text-white/20 mx-2">·</span>
-            {record.incident.title}
+            <Link
+              href={`/session/${record.incident.incidentId}`}
+              className="hover:text-cyan-300 transition-colors"
+            >
+              <span className="text-slate-400 font-semibold">
+                {record.incident.exceptionType}
+              </span>
+              <span className="text-white/20 mx-2">·</span>
+              {record.incident.title}
+            </Link>
           </h3>
 
           {/* Exception message */}
           <p className="max-w-2xl text-sm leading-relaxed text-slate-400">
             {record.incident.exceptionMessage}
           </p>
+
+          {/* Compact pipeline progress */}
+          <div className="pt-1">
+            <CompactPipelineBar steps={steps} />
+          </div>
         </div>
 
         {/* Action buttons */}
         <div className="flex items-center gap-2 shrink-0">
-          <motion.button
-            type="button"
-            whileHover={canOpenInIde ? { scale: 1.04 } : undefined}
-            whileTap={canOpenInIde ? { scale: 0.97 } : undefined}
-            disabled={!canOpenInIde || !onOpenInIde}
-            onClick={() =>
-              canOpenInIde && onOpenInIde?.(record.incident.incidentId)
-            }
-            title={
-              canOpenInIde
-                ? "Open this file in your running JetBrains IDE"
-                : "No repo-relative path available for this incident"
-            }
-            className="flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/8 px-4 py-2 text-xs font-semibold text-amber-300 transition-all hover:border-amber-300/40 hover:bg-amber-400/15 hover:shadow-[0_4px_20px_rgba(251,191,36,0.12)] cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-amber-400/20 disabled:hover:bg-amber-400/8 disabled:hover:shadow-none"
-          >
-            <FileCode2 className="w-3.5 h-3.5" />
-            Open in IDE
-          </motion.button>
+          {!autopilotEnabled && (
+            <motion.button
+              type="button"
+              whileHover={canOpenInIde ? { scale: 1.04 } : undefined}
+              whileTap={canOpenInIde ? { scale: 0.97 } : undefined}
+              disabled={!canOpenInIde || !onOpenInIde}
+              onClick={() =>
+                canOpenInIde && onOpenInIde?.(record.incident.incidentId)
+              }
+              title={
+                canOpenInIde
+                  ? "Open this file in your running JetBrains IDE"
+                  : "No repo-relative path available for this incident"
+              }
+              className="flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/8 px-4 py-2 text-xs font-semibold text-amber-300 transition-all hover:border-amber-300/40 hover:bg-amber-400/15 hover:shadow-[0_4px_20px_rgba(251,191,36,0.12)] cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-amber-400/20 disabled:hover:bg-amber-400/8 disabled:hover:shadow-none"
+            >
+              <FileCode2 className="w-3.5 h-3.5" />
+              Open in IDE
+            </motion.button>
+          )}
           <motion.a
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.97 }}
@@ -520,6 +645,11 @@ function IncidentCard({
         />
       </dl>
 
+      {/* ── Autopilot progress strip ───────────────────── */}
+      {autopilotEnabled && pipeline ? (
+        <PipelineStrip pipeline={pipeline} />
+      ) : null}
+
       {/* ── Code context ───────────────────────────────── */}
       {record.incident.codeContext ? (
         <div className="mt-5 code-block overflow-hidden">
@@ -535,6 +665,100 @@ function IncidentCard({
         </div>
       ) : null}
     </motion.article>
+  );
+}
+
+/* ── Pipeline progress strip ───────────────────────────── */
+const PIPELINE_STEPS: { id: AutopilotStepId; label: string; icon: typeof Search }[] = [
+  { id: "fetch_source", label: "Fetch", icon: Download },
+  { id: "analyze", label: "Analyze", icon: Search },
+  { id: "open_pr", label: "Open PR", icon: GitPullRequest },
+];
+
+function isAutopilotStepId(value: unknown): value is AutopilotStepId {
+  return value === "fetch_source" || value === "analyze" || value === "open_pr";
+}
+
+function stepIndex(step: AutopilotStepId): number {
+  return PIPELINE_STEPS.findIndex((s) => s.id === step);
+}
+
+function PipelineStrip({ pipeline }: { pipeline: AutopilotStatus }) {
+  const failed = pipeline.phase === "failed";
+  const completed = pipeline.phase === "completed";
+  const currentIdx =
+    pipeline.phase === "running"
+      ? stepIndex(pipeline.step)
+      : completed
+        ? PIPELINE_STEPS.length
+        : -1;
+
+  return (
+    <div className="mt-5 rounded-2xl border border-white/8 bg-white/[0.02] p-4">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-[0.6rem] font-semibold uppercase tracking-[0.22em] text-slate-500">
+          Autopilot Pipeline
+        </span>
+        {completed && "prUrl" in pipeline ? (
+          <a
+            href={pipeline.prUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3 py-1 text-[0.65rem] font-semibold text-emerald-300 hover:border-emerald-300/50 hover:bg-emerald-500/15"
+          >
+            <GitPullRequest className="w-3 h-3" />
+            PR #{pipeline.prNumber}
+          </a>
+        ) : null}
+        {failed && "reason" in pipeline ? (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-red-400/25 bg-red-500/10 px-3 py-1 text-[0.65rem] font-semibold text-red-300">
+            <XCircle className="w-3 h-3" />
+            {pipeline.reason}
+          </span>
+        ) : null}
+      </div>
+      <div className="flex items-center gap-2">
+        {PIPELINE_STEPS.map((step, idx) => {
+          const done = idx < currentIdx;
+          const active = idx === currentIdx && pipeline.phase === "running";
+          const isFailedHere = failed && idx === Math.max(currentIdx, 0);
+          const StepIcon = step.icon;
+          const dotTone = isFailedHere
+            ? "border-red-400/40 bg-red-500/15 text-red-300"
+            : done
+              ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-300"
+              : active
+                ? "border-cyan-400/40 bg-cyan-500/15 text-cyan-200"
+                : "border-white/10 bg-white/[0.02] text-slate-500";
+          const barTone = done
+            ? "bg-emerald-400/40"
+            : active
+              ? "bg-cyan-400/40"
+              : "bg-white/10";
+          return (
+            <div key={step.id} className="flex items-center gap-2 flex-1">
+              <div
+                className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-[0.65rem] font-semibold ${dotTone}`}
+              >
+                {active ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : isFailedHere ? (
+                  <XCircle className="w-3 h-3" />
+                ) : done ? (
+                  <CheckCircle2 className="w-3 h-3" />
+                ) : (
+                  <StepIcon className="w-3 h-3" />
+                )}
+                {step.label}
+              </div>
+              {idx < PIPELINE_STEPS.length - 1 ? (
+                <div className={`h-px flex-1 ${barTone}`} />
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

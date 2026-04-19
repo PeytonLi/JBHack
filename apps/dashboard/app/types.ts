@@ -61,3 +61,58 @@ export type IncidentsClearedEvent = {
   deletedCount: number;
   incidentIds: string[];
 };
+
+export type AgentStatusResponse = {
+  autopilotEnabled: boolean;
+  githubRepo: string | null;
+  codexAvailable: boolean;
+};
+
+export type AutopilotStepId = "fetch_source" | "analyze" | "open_pr";
+
+export type AutopilotStepEvent = {
+  incidentId: string;
+  step: AutopilotStepId;
+};
+
+export type AutopilotCompletedEvent = {
+  incidentId: string;
+  prUrl: string;
+  prNumber: number;
+  branch?: string;
+};
+
+export type AutopilotFailedEvent = {
+  incidentId: string;
+  reason: string;
+  path?: string;
+  traceback?: string;
+};
+
+export type AutopilotStatus =
+  | { phase: "idle" }
+  | { phase: "running"; step: AutopilotStepId }
+  | { phase: "completed"; prUrl: string; prNumber: number; branch?: string }
+  | { phase: "failed"; reason: string; path?: string };
+
+export type PipelineStepId =
+  | "ingested"
+  | "analyzing"
+  | "analyzed"
+  | "pr_opening"
+  | "pr_ready";
+export type PipelineStepStatus = "pending" | "running" | "completed" | "failed";
+export type PipelineStepEvent = {
+  incidentId: string;
+  step: PipelineStepId;
+  status: PipelineStepStatus;
+  prUrl?: string | null;
+  error?: string | null;
+};
+export type PipelineStep = {
+  id: PipelineStepId;
+  label: string;
+  status: PipelineStepStatus;
+  updatedAt: string | null;
+  detail?: string | null;
+};

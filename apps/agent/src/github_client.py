@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import logging
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from github import Github, GithubException, UnknownObjectException
@@ -20,14 +22,54 @@ class PullRequestResult(CamelModel):
     error: str | None = None
 
 
+@dataclass(slots=True)
+class FetchedFile:
+    content: str
+    sha: str
+    ref: str
+    path: str
+
+
 class GitHubClient:
     def __init__(self, token: str, repo: str) -> None:
         self._gh = Github(token)
         self._repo = self._gh.get_repo(repo)
+        self._default_branch_cache: str | None = None
 
     @property
     def default_branch(self) -> str:
         return self._repo.default_branch or "main"
+
+    def fetch_default_branch(self) -> str:
+        if self._default_branch_cache is None:
+            self._default_branch_cache = self._repo.default_branch or "main"
+        return self._default_branch_cache
+
+    def fetch_file(self, path: str, ref: str | None = None) -> FetchedFile:
+        resolved_ref = ref or self.fetch_default_branch()
+        try:
+            contents = self._repo.get_contents(path, ref=resolved_ref)
+        except UnknownObjectException as exc:
+            raise FileNotFoundError(path) from exc
+        except GithubException as exc:
+            if exc.status == 404:
+                raise FileNotFoundError(path) from exc
+            raise
+        if isinstance(contents, list):
+            raise FileNotFoundError(path)
+
+        raw = contents.content or ""
+        encoding = (contents.encoding or "").lower()
+        if encoding == "base64":
+            decoded = base64.b64decode(raw).decode("utf-8")
+        else:
+            decoded = raw
+        return FetchedFile(
+            content=decoded,
+            sha=contents.sha,
+            ref=resolved_ref,
+            path=contents.path,
+        )
 
     def open_pr_for_incident(
         self,

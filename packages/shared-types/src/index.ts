@@ -112,3 +112,18 @@ export interface PullRequestResult {
   localArtifactPath: string | null;
   error: string | null;
 }
+
+export type PipelineStepId =
+  | "ingested"
+  | "analyzing"
+  | "analyzed"
+  | "pr_opening"
+  | "pr_ready";
+export type PipelineStepStatus = "pending" | "running" | "completed" | "failed";
+export interface PipelineStepEvent {
+  incidentId: string;
+  step: PipelineStepId;
+  status: PipelineStepStatus;
+  prUrl?: string | null;
+  error?: string | null;
+}

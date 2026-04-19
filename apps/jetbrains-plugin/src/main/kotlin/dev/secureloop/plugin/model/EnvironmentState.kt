@@ -13,12 +13,20 @@ data class AgentHealthResponse(
     val totalIncidentCount: Int = 0,
 )
 
+@Serializable
+data class AgentStatusResponse(
+    val autopilotEnabled: Boolean = false,
+    val githubRepo: String? = null,
+    val codexAvailable: Boolean = false,
+)
+
 sealed interface AgentConnectionState {
     data object Connecting : AgentConnectionState
 
     data class Connected(
         val baseUrl: String,
         val demoModeAvailable: Boolean,
+        val autopilotEnabled: Boolean = false,
     ) : AgentConnectionState
 
     data class WaitingForAgent(

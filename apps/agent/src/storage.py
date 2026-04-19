@@ -394,6 +394,27 @@ class IncidentBroker:
             queue.put_nowait(payload)
         return len(subscribers)
 
+    async def publish_pipeline(
+        self,
+        *,
+        incident_id: str,
+        event_type: Literal["pipeline.step", "pipeline.completed", "pipeline.failed"],
+        payload: dict[str, object] | None = None,
+    ) -> int:
+        envelope = {
+            "type": event_type,
+            "pipeline": {
+                "incidentId": incident_id,
+                **(payload or {}),
+            },
+        }
+        serialized = json.dumps(envelope)
+        async with self._lock:
+            subscribers = list(self._subscribers)
+        for queue in subscribers:
+            queue.put_nowait(serialized)
+        return len(subscribers)
+
     async def publish_navigate(self, navigate: NavigateRequest) -> int:
         envelope = {
             "type": "ide.navigate",
