@@ -43,47 +43,56 @@ async def test_signed_webhook_persists_and_acknowledges_incident(app) -> None:
     await app.state.store.initialize()
     body = json.dumps(sample_issue_alert_payload()).encode("utf-8")
     signature = hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+    queue = await app.state.broker.subscribe()
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post(
-            "/sentry/webhook",
-            content=body,
-            headers={
-                "content-type": "application/json",
-                "sentry-hook-resource": "event_alert",
-                "sentry-hook-signature": signature,
-            },
-        )
-        assert response.status_code == 204
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/sentry/webhook",
+                content=body,
+                headers={
+                    "content-type": "application/json",
+                    "sentry-hook-resource": "event_alert",
+                    "sentry-hook-signature": signature,
+                },
+            )
+            assert response.status_code == 204
+            created_frame = json.loads(queue.get_nowait())
+            assert created_frame["type"] == "incident.created"
 
-        incidents = await app.state.store.list_unreviewed()
-        assert len(incidents) == 1
-        assert incidents[0].repo_relative_path == "apps/target/src/main.py"
-        assert incidents[0].sentry_status == "unresolved"
+            incidents = await app.state.store.list_unreviewed()
+            assert len(incidents) == 1
+            assert incidents[0].repo_relative_path == "apps/target/src/main.py"
+            assert incidents[0].sentry_status == "unresolved"
 
-        feed_response = await client.get("/incidents?status=all")
-        assert feed_response.status_code == 200
-        feed = feed_response.json()
-        assert feed["summary"]["openCount"] == 1
-        assert feed["summary"]["reviewedCount"] == 0
-        assert len(feed["incidents"]) == 1
-        assert feed["incidents"][0]["status"] == "open"
-        assert feed["incidents"][0]["incident"]["sentryStatus"] == "unresolved"
+            feed_response = await client.get("/incidents?status=all")
+            assert feed_response.status_code == 200
+            feed = feed_response.json()
+            assert feed["summary"]["openCount"] == 1
+            assert feed["summary"]["reviewedCount"] == 0
+            assert len(feed["incidents"]) == 1
+            assert feed["incidents"][0]["status"] == "open"
+            assert feed["incidents"][0]["incident"]["sentryStatus"] == "unresolved"
 
-        ack_response = await client.post(
-            f"/ide/events/{incidents[0].incident_id}/review",
-            headers={"authorization": "Bearer ide-token"},
-        )
-        assert ack_response.status_code == 204
-        assert await app.state.store.list_unreviewed() == []
+            ack_response = await client.post(
+                f"/ide/events/{incidents[0].incident_id}/review",
+                headers={"authorization": "Bearer ide-token"},
+            )
+            assert ack_response.status_code == 204
+            updated_frame = json.loads(queue.get_nowait())
+            assert updated_frame["type"] == "incident.updated"
+            assert updated_frame["incident"]["status"] == "reviewed"
+            assert await app.state.store.list_unreviewed() == []
 
-        reviewed_feed_response = await client.get("/incidents?status=reviewed")
-        assert reviewed_feed_response.status_code == 200
-        reviewed_feed = reviewed_feed_response.json()
-        assert reviewed_feed["summary"]["openCount"] == 0
-        assert reviewed_feed["summary"]["reviewedCount"] == 1
-        assert reviewed_feed["incidents"][0]["status"] == "reviewed"
+            reviewed_feed_response = await client.get("/incidents?status=reviewed")
+            assert reviewed_feed_response.status_code == 200
+            reviewed_feed = reviewed_feed_response.json()
+            assert reviewed_feed["summary"]["openCount"] == 0
+            assert reviewed_feed["summary"]["reviewedCount"] == 1
+            assert reviewed_feed["incidents"][0]["status"] == "reviewed"
+    finally:
+        await app.state.broker.unsubscribe(queue)
 
 
 @pytest.mark.asyncio

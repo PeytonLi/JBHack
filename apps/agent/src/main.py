@@ -347,7 +347,7 @@ def create_app(
     @app.post("/ide/events/{incident_id}/ack", status_code=204)
     async def acknowledge_incident(incident_id: str, request: Request) -> Response:
         _verify_ide_request(request, app.state.settings)
-        updated = await app.state.store.mark_reviewed(incident_id)
+        updated = await _mark_reviewed_and_publish(app, incident_id)
         if not updated:
             raise HTTPException(status_code=404, detail="Incident not found.")
         return Response(status_code=204)
@@ -355,7 +355,7 @@ def create_app(
     @app.post("/ide/events/{incident_id}/review", status_code=204)
     async def review_incident(incident_id: str, request: Request) -> Response:
         _verify_ide_request(request, app.state.settings)
-        updated = await app.state.store.mark_reviewed(incident_id)
+        updated = await _mark_reviewed_and_publish(app, incident_id)
         if not updated:
             raise HTTPException(status_code=404, detail="Incident not found.")
         return Response(status_code=204)
@@ -519,6 +519,17 @@ async def _resolve_analysis(payload: AnalyzeIncidentRequest) -> AnalyzeIncidentR
             status_code=502,
             detail="SecureLoop analysis response was invalid.",
         ) from exc
+
+
+async def _mark_reviewed_and_publish(app: FastAPI, incident_id: str) -> bool:
+    updated = await app.state.store.mark_reviewed(incident_id)
+    if not updated:
+        return False
+
+    record = await app.state.store.get_record(incident_id)
+    if record is not None:
+        await app.state.broker.publish(record, event_type="incident.updated")
+    return True
 
 
 def _use_fake_codex() -> bool:
