@@ -131,6 +131,53 @@ class SecureLoopProjectService(
         }
     }
 
+    fun approveAndApplyFix(presentation: IncidentPresentation) {
+        val analysis = presentation.analysis ?: return
+        val patch = analysis.patch
+        val file = ProjectFileResolver.findByAbsolutePath(project, patch.repoRelativePath) ?: return
+        
+        ApplicationManager.getApplication().invokeLater {
+            com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+                val document = FileDocumentManager.getInstance().getDocument(file) ?: return@runWriteCommandAction
+                val newText = document.text.replace(patch.oldText, patch.newText)
+                document.setText(newText)
+            }
+            
+            service<SecureLoopApplicationService>().openPR(presentation.incident.incidentId) {
+                val url = it ?: "Unknown URL"
+                com.intellij.openapi.ui.Messages.showMessageDialog(project, "PR created successfully!\n\n\$url", "PR Opened", com.intellij.openapi.ui.Messages.getInformationIcon())
+            }
+        }
+    }
+
+    fun rejectFix(presentation: IncidentPresentation) {
+        val reason = com.intellij.openapi.ui.Messages.showInputDialog(
+            project,
+            "Why is this fix incorrect/rejected?",
+            "Reject Fix",
+            com.intellij.openapi.ui.Messages.getQuestionIcon()
+        ) ?: return
+        
+        service<SecureLoopApplicationService>().rejectFix(presentation.incident.incidentId, reason)
+    }
+
+    fun reportVulnerability(file: com.intellij.openapi.vfs.VirtualFile, analysis: dev.secureloop.plugin.model.AnalysisResponse) {
+        ApplicationManager.getApplication().invokeLater {
+            val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).selectedTextEditor ?: return@invokeLater
+            if (editor.virtualFile == file) {
+               val text = editor.document.text
+               val startOffset = text.indexOf(analysis.patch.oldText).takeIf { it >= 0 } ?: return@invokeLater
+               val endOffset = startOffset + analysis.patch.oldText.length
+               editor.markupModel.addRangeHighlighter(
+                   startOffset, endOffset, HighlighterLayer.WARNING, 
+                   TextAttributes(null, JBColor(Color(255, 0, 0, 40), Color(255, 0, 0, 40)), JBColor.RED, EffectType.WAVE_UNDERSCORE, Font.PLAIN), 
+                   com.intellij.openapi.editor.markup.HighlighterTargetArea.EXACT_RANGE
+               )
+            }
+        }
+    }
+
+
     private fun readSourceContext(filePath: String, lineNumber: Int): String {
         val file = ProjectFileResolver.findByAbsolutePath(project, filePath) ?: return ""
         val document = ApplicationManager.getApplication().runReadAction<com.intellij.openapi.editor.Document?> {

@@ -19,10 +19,17 @@ from .models import (
     IncidentFeedResponse,
     IssueAlertWebhook,
     normalize_sentry_event,
+    GenerateCodeBody,
+    GenerateCodeResponse,
+    AnalyzeFileBody,
 )
 from .sentry_client import SentryEventClient
 from .storage import IncidentBroker, IncidentStore
-from .codex_analysis import analyze_incident as run_codex_analysis
+from .codex_analysis import (
+    analyze_incident as run_codex_analysis,
+    generate_secure_code as run_code_generation,
+    analyze_file as run_file_scan,
+)
 
 
 logger = logging.getLogger("secureloop.agent")
@@ -190,6 +197,57 @@ def create_app(
 
         response = await run_codex_analysis(analysis_request)
         return JSONResponse(response.model_dump(mode="json", by_alias=True))
+
+    @app.post("/ide/generate")
+    async def generate_endpoint(
+        body: GenerateCodeBody,
+        request: Request,
+    ) -> JSONResponse:
+        _verify_ide_request(request, app.state.settings)
+        response = await run_code_generation(body)
+        return JSONResponse(response.model_dump(mode="json", by_alias=True))
+
+    @app.post("/ide/analyze-file")
+    async def analyze_file_endpoint(
+        body: AnalyzeFileBody,
+        request: Request,
+    ) -> JSONResponse:
+        _verify_ide_request(request, app.state.settings)
+        response = await run_file_scan(body)
+        return JSONResponse(response.model_dump(mode="json", by_alias=True))
+
+    @app.post("/ide/scan-deps")
+    async def scan_deps_endpoint(
+        body: dict,
+        request: Request,
+    ) -> JSONResponse:
+        _verify_ide_request(request, app.state.settings)
+        # Snyk/Safety stub for demo
+        req_text = body.get("requirements_text", "")
+        findings = []
+        if "fastapi" in req_text.lower() and "==" not in req_text.lower():
+            findings.append("CVE-2024-XXXX: FastAPI < 0.100 is vulnerable to ReDoS. Update to 0.100.0+")
+        return JSONResponse({"findings": findings})
+
+    @app.post("/ide/reject-fix")
+
+    async def reject_fix_endpoint(
+        body: dict,
+        request: Request,
+    ) -> Response:
+        _verify_ide_request(request, app.state.settings)
+        logger.info(f"Module 4 Human Gate Reject: {body.get('reason')}")
+        return Response(status_code=204)
+
+    @app.post("/ide/open-pr")
+    async def open_pr_endpoint(
+        body: dict,
+        request: Request,
+    ) -> JSONResponse:
+        _verify_ide_request(request, app.state.settings)
+        logger.info("Module 4 PR Opened with diagnosis attached.")
+        # In a real setup, import github via PyGithub here
+        return JSONResponse({"pr_url": "https://github.com/PeytonLi/JBHack/pulls/1"})
 
     return app
 

@@ -123,6 +123,22 @@ class AnalyzeIncidentBody(CamelModel):
     policy_text: str | None = None
 
 
+class GenerateCodeBody(CamelModel):
+    source_context: str
+    policy_text: str | None = None
+    language: str = "python"
+
+
+class GenerateCodeResponse(CamelModel):
+    completion: str
+
+
+class AnalyzeFileBody(CamelModel):
+    file_path: str
+    file_contents: str
+    policy_text: str | None = None
+
+
 class AnalysisPatch(CamelModel):
     repo_relative_path: str
     old_text: str

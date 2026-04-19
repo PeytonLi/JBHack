@@ -34,6 +34,8 @@ class SecureLoopToolWindowPanel(
     private val markReviewedButton = JButton("Mark Reviewed")
     private val openSentryButton = JButton("Open Sentry")
     private val analyzeButton = JButton("Analyze")
+    private val approveButton = JButton("Approve (Apply & Open PR)")
+    private val rejectButton = JButton("Reject")
     private var analyzing = false
     private var connectionState: AgentConnectionState = AgentConnectionState.Connecting
     private var projectCompatibility: ProjectCompatibilityState = ProjectCompatibilityState.Unsupported(
@@ -78,6 +80,12 @@ class SecureLoopToolWindowPanel(
         analyzeButton.addActionListener {
             selectedIncident()?.let(projectService::analyzeSelectedIncident)
         }
+        approveButton.addActionListener {
+            selectedIncident()?.let(projectService::approveAndApplyFix)
+        }
+        rejectButton.addActionListener {
+            selectedIncident()?.let(projectService::rejectFix)
+        }
 
         val statusPanel = JPanel(BorderLayout()).apply {
             add(statusLabel, BorderLayout.NORTH)
@@ -92,6 +100,8 @@ class SecureLoopToolWindowPanel(
             add(markReviewedButton)
             add(openSentryButton)
             add(analyzeButton)
+            add(approveButton)
+            add(rejectButton)
         }
 
         val topPanel = JPanel(BorderLayout()).apply {
@@ -225,6 +235,8 @@ class SecureLoopToolWindowPanel(
         analyzeButton.isEnabled = presentation.resolution is ResolutionState.Resolved
             && presentation.analysis == null
             && !analyzing
+        approveButton.isEnabled = presentation.analysis != null
+        rejectButton.isEnabled = presentation.analysis != null
     }
 
     private fun selectedIncident(): IncidentPresentation? = incidentList.selectedValue

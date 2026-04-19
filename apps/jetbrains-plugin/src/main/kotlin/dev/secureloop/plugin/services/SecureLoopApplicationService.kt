@@ -211,6 +211,45 @@ class SecureLoopApplicationService : Disposable {
         }
     }
 
+    fun openPR(incidentId: String, callback: (String?) -> Unit) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val token = loadToken() ?: return@executeOnPooledThread
+            try {
+                val request = HttpRequest.newBuilder(URI.create("${agentBaseUrl()}/ide/open-pr"))
+                    .header("Authorization", "Bearer $token")
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{}"))
+                    .timeout(Duration.ofSeconds(10))
+                    .build()
+                val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+                if (response.statusCode() == 200) {
+                    val url = json.decodeFromString<kotlinx.serialization.json.JsonObject>(response.body())["pr_url"]?.let { it as? kotlinx.serialization.json.JsonPrimitive }?.content
+                    callback(url)
+                } else {
+                    callback(null)
+                }
+            } catch (e: Exception) {
+                callback(null)
+            }
+        }
+    }
+
+    fun rejectFix(incidentId: String, reason: String) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val token = loadToken() ?: return@executeOnPooledThread
+            try {
+                val body = Json.encodeToString(mapOf("reason" to reason))
+                val request = HttpRequest.newBuilder(URI.create("${agentBaseUrl()}/ide/reject-fix"))
+                    .header("Authorization", "Bearer $token")
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .timeout(Duration.ofSeconds(10))
+                    .build()
+                client.send(request, HttpResponse.BodyHandlers.discarding())
+            } catch (e: Exception) { }
+        }
+    }
+
     override fun dispose() {
         disposed = true
     }

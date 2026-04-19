@@ -19,5 +19,15 @@
             displayType="BALLOON"
             isLogByDefault="true"/>
         <postStartupActivity implementation="dev.secureloop.plugin.services.SecureLoopStartupActivity"/>
+        
+        <intentionAction>
+            <className>dev.secureloop.plugin.services.SecureLoopIntentionAction</className>
+            <category>SecureLoop</category>
+        </intentionAction>
     </extensions>
+    
+    <applicationListeners>
+        <listener class="dev.secureloop.plugin.services.SecureLoopSaveListener"
+                  topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener"/>
+    </applicationListeners>
 </idea-plugin>

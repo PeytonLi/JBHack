@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 from .codex_client import call_codex, codex_available
-from .models import AnalysisPatch, AnalysisRequest, AnalysisResponse
+from .models import (
+    AnalysisPatch,
+    AnalysisRequest,
+    AnalysisResponse,
+    GenerateCodeBody,
+    GenerateCodeResponse,
+    AnalyzeFileBody,
+)
 from .prompt_builder import build_codex_prompt
 from .validator import (
     build_patch,
@@ -11,6 +18,44 @@ from .validator import (
     parse_analysis_response,
     validate_analysis_response,
 )
+
+
+async def generate_secure_code(body: GenerateCodeBody) -> GenerateCodeResponse:
+    if not codex_available():
+        return GenerateCodeResponse(completion="# Codex 5.3 unavailable for generation")
+
+    system_prompt = (
+        "You are an AI code generator prioritizing secure code via SecureLoop/Codex 5.3.\n"
+        "Generate a secure completion for the given source context. ONLY output the code to append or insert, "
+        "no markdown blocks, no explanations. Make sure it respects this policy if provided: "
+        f"{body.policy_text or 'No specific policy.'}"
+    )
+
+    result = await call_codex(
+        system_prompt=system_prompt,
+        user_message=f"Context:\n{body.source_context}",
+        response_format={"type": "text"},
+        max_output_tokens=300,
+    )
+    
+    if not result.success:
+        return GenerateCodeResponse(completion="# Codex generation failed.")
+        
+    return GenerateCodeResponse(completion=result.raw_text.strip())
+
+
+async def analyze_file(body: AnalyzeFileBody) -> AnalysisResponse:
+    request = AnalysisRequest(
+        incident_id="file-scan-001",
+        repo_relative_path=body.file_path,
+        line_number=0,
+        exception_type="StaticAnalysis",
+        exception_message="On-save vulnerability scan",
+        title=f"Scan: {body.file_path}",
+        source_context=body.file_contents,
+        policy_text=body.policy_text,
+    )
+    return await analyze_incident(request)
 
 
 async def analyze_incident(request: AnalysisRequest) -> AnalysisResponse:
