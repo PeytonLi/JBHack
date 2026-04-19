@@ -7,6 +7,8 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import dev.secureloop.plugin.model.AgentConnectionState
+import dev.secureloop.plugin.model.AnalysisState
+import dev.secureloop.plugin.model.AnalyzeIncidentResponse
 import dev.secureloop.plugin.model.IncidentPresentation
 import dev.secureloop.plugin.model.ProjectCompatibilityState
 import dev.secureloop.plugin.model.ResolutionState
@@ -31,12 +33,11 @@ class SecureLoopToolWindowPanel(
     private val retryConnectionButton = JButton("Retry Connection")
     private val setupGuideButton = JButton("Open Setup Guide")
     private val openFileButton = JButton("Open File")
+    private val analyzeButton = JButton("Analyze with Codex")
+    private val approveFixButton = JButton("Approve Fix")
+    private val rejectButton = JButton("Reject")
     private val markReviewedButton = JButton("Mark Reviewed")
     private val openSentryButton = JButton("Open Sentry")
-    private val analyzeButton = JButton("Analyze")
-    private val approveButton = JButton("Approve (Apply & Open PR)")
-    private val rejectButton = JButton("Reject")
-    private var analyzing = false
     private var connectionState: AgentConnectionState = AgentConnectionState.Connecting
     private var projectCompatibility: ProjectCompatibilityState = ProjectCompatibilityState.Unsupported(
         "Open the SecureLoop demo repo to get started.",
@@ -70,21 +71,21 @@ class SecureLoopToolWindowPanel(
         openFileButton.addActionListener {
             selectedIncident()?.let(projectService::openSelectionInEditor)
         }
+        analyzeButton.addActionListener {
+            selectedIncident()?.let(projectService::analyzeSelection)
+        }
+        approveFixButton.addActionListener {
+            selectedIncident()?.let(projectService::approveFix)
+        }
+        rejectButton.addActionListener {
+            selectedIncident()?.let(projectService::rejectAnalysis)
+        }
         markReviewedButton.addActionListener {
             selectedIncident()?.let(projectService::markIncidentReviewed)
             renderSelection()
         }
         openSentryButton.addActionListener {
             selectedIncident()?.let(projectService::openIncidentInBrowser)
-        }
-        analyzeButton.addActionListener {
-            selectedIncident()?.let(projectService::analyzeSelectedIncident)
-        }
-        approveButton.addActionListener {
-            selectedIncident()?.let(projectService::approveAndApplyFix)
-        }
-        rejectButton.addActionListener {
-            selectedIncident()?.let(projectService::rejectFix)
         }
 
         val statusPanel = JPanel(BorderLayout()).apply {
@@ -97,11 +98,11 @@ class SecureLoopToolWindowPanel(
             add(retryConnectionButton)
             add(setupGuideButton)
             add(openFileButton)
+            add(analyzeButton)
+            add(approveFixButton)
+            add(rejectButton)
             add(markReviewedButton)
             add(openSentryButton)
-            add(analyzeButton)
-            add(approveButton)
-            add(rejectButton)
         }
 
         val topPanel = JPanel(BorderLayout()).apply {
@@ -159,17 +160,15 @@ class SecureLoopToolWindowPanel(
         }
     }
 
-    fun setAnalyzing(value: Boolean) {
-        analyzing = value
-        renderSelection()
-    }
-
     private fun renderSelection() {
         renderEnvironment()
         val presentation = selectedIncident()
         if (presentation == null) {
             detailArea.text = onboardingMessage()
             openFileButton.isEnabled = false
+            analyzeButton.isEnabled = false
+            approveFixButton.isEnabled = false
+            rejectButton.isEnabled = false
             markReviewedButton.isEnabled = false
             openSentryButton.isEnabled = false
             return
@@ -188,55 +187,35 @@ class SecureLoopToolWindowPanel(
             appendLine("Function: ${presentation.incident.functionName ?: "Unavailable"}")
             appendLine("Resolution: ${resolutionText(presentation.resolution)}")
             appendLine("Review state: ${if (presentation.reviewed) "Reviewed" else "Open"}")
+            appendLine("Analysis state: ${analysisStateText(presentation.analysisState)}")
+            presentation.analysisError?.takeIf { it.isNotBlank() }?.let {
+                appendLine()
+                appendLine("Analysis error:")
+                appendLine(it)
+            }
             presentation.incident.codeContext?.takeIf { it.isNotBlank() }?.let {
                 appendLine()
                 appendLine("Code context:")
                 appendLine(it)
             }
-
-            if (analyzing) {
-                appendLine()
-                appendLine("═══════════════════════════════════════")
-                appendLine("⏳ Analyzing with Codex...")
-                appendLine("═══════════════════════════════════════")
-            }
-
             presentation.analysis?.let { analysis ->
                 appendLine()
-                appendLine("═══════════════════════════════════════")
-                appendLine("SECURITY ANALYSIS")
-                appendLine("═══════════════════════════════════════")
-                appendLine("Severity: ${analysis.severity}")
-                analysis.cwe?.let { appendLine("CWE: $it") }
-                analysis.owasp?.let { appendLine("OWASP: $it") }
-                analysis.category?.let { appendLine("Category: $it") }
-                appendLine()
-                appendLine("Explanation:")
-                appendLine(analysis.explanation)
-                if (analysis.violatedPolicy.isNotEmpty()) {
-                    appendLine()
-                    appendLine("Violated Policies:")
-                    analysis.violatedPolicy.forEach { appendLine("  • $it") }
-                }
-                if (analysis.fixPlan.isNotEmpty()) {
-                    appendLine()
-                    appendLine("Fix Plan:")
-                    analysis.fixPlan.forEach { appendLine("  • $it") }
-                }
-                appendLine()
-                appendLine("Diff:")
-                appendLine(analysis.diff)
+                append(analysisText(analysis))
             }
         }
 
+        val resolved = presentation.resolution is ResolutionState.Resolved
+        val connected = connectionState is AgentConnectionState.Connected
+        val analyzing = presentation.analysisState == AnalysisState.Loading
+        val applying = presentation.analysisState == AnalysisState.Applying
         openSentryButton.isEnabled = true
-        openFileButton.isEnabled = presentation.resolution is ResolutionState.Resolved
+        openFileButton.isEnabled = resolved
+        analyzeButton.isEnabled = resolved && connected && !analyzing && !applying
+        approveFixButton.isEnabled = resolved &&
+            presentation.analysis != null &&
+            presentation.analysisState == AnalysisState.Ready
+        rejectButton.isEnabled = presentation.analysis != null && presentation.analysisState != AnalysisState.Applying
         markReviewedButton.isEnabled = !presentation.reviewed
-        analyzeButton.isEnabled = presentation.resolution is ResolutionState.Resolved
-            && presentation.analysis == null
-            && !analyzing
-        approveButton.isEnabled = presentation.analysis != null
-        rejectButton.isEnabled = presentation.analysis != null
     }
 
     private fun selectedIncident(): IncidentPresentation? = incidentList.selectedValue
@@ -332,6 +311,43 @@ class SecureLoopToolWindowPanel(
             is ResolutionState.Resolved -> "${resolution.filePath}:${resolution.lineNumber}"
             is ResolutionState.Ambiguous -> "Ambiguous: ${resolution.candidates.joinToString()}"
             is ResolutionState.Unresolved -> "Unresolved: ${resolution.reason}"
+        }
+    }
+
+    private fun analysisStateText(state: AnalysisState): String {
+        return when (state) {
+            AnalysisState.Idle -> "Idle"
+            AnalysisState.Loading -> "Analyzing..."
+            AnalysisState.Ready -> "Analysis ready"
+            AnalysisState.Applying -> "Applying approved patch..."
+            AnalysisState.Applied -> "Patch applied locally"
+            AnalysisState.Failed -> "Failed"
+        }
+    }
+
+    private fun analysisText(analysis: AnalyzeIncidentResponse): String {
+        return buildString {
+            appendLine("Analysis")
+            appendLine("Severity: ${analysis.severity}")
+            appendLine("Category: ${analysis.category}")
+            appendLine("CWE: ${analysis.cwe}")
+            appendLine("Title: ${analysis.title}")
+            appendLine()
+            appendLine("Explanation:")
+            appendLine(analysis.explanation)
+            appendLine()
+            appendLine("Violated policy:")
+            analysis.violatedPolicy.forEach { rule ->
+                appendLine("- $rule")
+            }
+            appendLine()
+            appendLine("Fix plan:")
+            analysis.fixPlan.forEachIndexed { index, step ->
+                appendLine("${index + 1}. $step")
+            }
+            appendLine()
+            appendLine("Diff:")
+            appendLine(analysis.diff)
         }
     }
 

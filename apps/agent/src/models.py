@@ -139,13 +139,13 @@ class AnalyzeFileBody(CamelModel):
     policy_text: str | None = None
 
 
-class AnalysisPatch(CamelModel):
+class AnalyzePatch(CamelModel):
     repo_relative_path: str
     old_text: str
     new_text: str
 
 
-class AnalysisResponse(CamelModel):
+class AnalyzeIncidentResponse(CamelModel):
     severity: Literal["Critical", "High", "Medium", "Low"]
     category: str | None = None
     owasp: str | None = None
@@ -155,7 +155,7 @@ class AnalysisResponse(CamelModel):
     violated_policy: list[str] = Field(default_factory=list)
     fix_plan: list[str] = Field(default_factory=list)
     diff: str
-    patch: AnalysisPatch
+    patch: AnalyzePatch
 
 
 def normalize_sentry_event(

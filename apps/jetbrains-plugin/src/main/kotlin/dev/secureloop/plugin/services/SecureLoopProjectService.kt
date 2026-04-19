@@ -5,6 +5,7 @@ import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.markup.EffectType
@@ -16,8 +17,11 @@ import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.JBColor
 import dev.secureloop.plugin.model.AgentConnectionState
+import dev.secureloop.plugin.model.AnalysisState
+import dev.secureloop.plugin.model.AnalyzeIncidentRequest
 import dev.secureloop.plugin.model.IncidentPresentation
 import dev.secureloop.plugin.model.NormalizedIncident
 import dev.secureloop.plugin.model.ProjectCompatibilityState
@@ -30,6 +34,7 @@ import java.awt.Color
 import java.awt.Font
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.text.Regex
 
 @Service(Service.Level.PROJECT)
 class SecureLoopProjectService(
@@ -94,76 +99,164 @@ class SecureLoopProjectService(
         upsertIncident(presentation.copy(reviewed = true))
     }
 
-    fun analyzeSelectedIncident(presentation: IncidentPresentation) {
-        if (presentation.analysis != null) {
+    fun analyzeSelection(presentation: IncidentPresentation) {
+        val resolved = presentation.resolution as? ResolutionState.Resolved ?: return
+        if (connectionState !is AgentConnectionState.Connected) {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop is not connected to the local agent.")
             return
         }
 
-        val resolution = presentation.resolution
-        if (resolution !is ResolutionState.Resolved) {
+        val repoRelativePath = repoRelativePathFor(presentation, resolved)
+        if (repoRelativePath == null) {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop could not determine the repo-relative path.")
             return
         }
 
-        val sourceContext = readSourceContext(resolution.filePath, resolution.lineNumber)
-        if (sourceContext.isBlank()) {
+        val resolvedFile = resolvedVirtualFile(resolved.filePath)
+        if (resolvedFile == null) {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop could not open the resolved file.")
             return
         }
 
-        val policyText = readSecurityPolicy()
+        val sourceContext = collectSourceContext(resolvedFile, resolved.lineNumber)
+        if (sourceContext == null) {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop could not collect source context.")
+            return
+        }
 
-        upsertIncident(presentation.copy(
-            analysis = null,
-        ))
-        ApplicationManager.getApplication().invokeLater {
-            panel?.setAnalyzing(true)
+        val policyText = readPolicyText()
+        if (policyText == null) {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop could not read security-policy.md from the project root.")
+            return
+        }
+
+        updateIncident(presentation.incident.incidentId) {
+            it.copy(
+                analysisState = AnalysisState.Loading,
+                analysisError = null,
+            )
         }
 
         service<SecureLoopApplicationService>().analyzeIncident(
-            incidentId = presentation.incident.incidentId,
-            sourceContext = sourceContext,
-            policyText = policyText,
-        ) { response ->
-            val updated = presentation.copy(analysis = response)
-            upsertIncident(updated)
-            ApplicationManager.getApplication().invokeLater {
-                panel?.setAnalyzing(false)
-            }
-        }
+            payload = AnalyzeIncidentRequest(
+                incidentId = presentation.incident.incidentId,
+                repoRelativePath = repoRelativePath,
+                lineNumber = resolved.lineNumber,
+                exceptionType = presentation.incident.exceptionType,
+                exceptionMessage = presentation.incident.exceptionMessage,
+                title = presentation.incident.title,
+                sourceContext = sourceContext,
+                policyText = policyText,
+            ),
+            onSuccess = { analysis ->
+                updateIncident(presentation.incident.incidentId) {
+                    it.copy(
+                        analysis = analysis,
+                        analysisState = AnalysisState.Ready,
+                        analysisError = null,
+                    )
+                }
+            },
+            onError = { message ->
+                failAnalysis(presentation.incident.incidentId, message)
+            },
+        )
     }
 
-    fun approveAndApplyFix(presentation: IncidentPresentation) {
-        val analysis = presentation.analysis ?: return
-        val patch = analysis.patch
-        val file = ProjectFileResolver.findByAbsolutePath(project, patch.repoRelativePath) ?: return
-        
-        ApplicationManager.getApplication().invokeLater {
-            com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
-                val document = FileDocumentManager.getInstance().getDocument(file) ?: return@runWriteCommandAction
-                val newText = document.text.replace(patch.oldText, patch.newText)
-                document.setText(newText)
-            }
-            
-            service<SecureLoopApplicationService>().openPR(presentation.incident.incidentId) {
-                val url = it ?: "Unknown URL"
-                com.intellij.openapi.ui.Messages.showMessageDialog(project, "PR created successfully!\n\n\$url", "PR Opened", com.intellij.openapi.ui.Messages.getInformationIcon())
-            }
+    fun rejectAnalysis(presentation: IncidentPresentation) {
+        updateIncident(presentation.incident.incidentId) {
+            it.copy(
+                analysis = null,
+                analysisState = AnalysisState.Idle,
+                analysisError = null,
+            )
         }
-    }
-
-    fun rejectFix(presentation: IncidentPresentation) {
         val reason = com.intellij.openapi.ui.Messages.showInputDialog(
             project,
-            "Why is this fix incorrect/rejected?",
-            "Reject Fix",
+            "Why is this analysis incorrect or rejected?",
+            "Reject Analysis",
             com.intellij.openapi.ui.Messages.getQuestionIcon()
-        ) ?: return
-        
-        service<SecureLoopApplicationService>().rejectFix(presentation.incident.incidentId, reason)
+        )
+        if (!reason.isNullOrBlank()) {
+             service<SecureLoopApplicationService>().rejectFix(presentation.incident.incidentId, reason)
+        }
     }
 
-    fun reportVulnerability(file: com.intellij.openapi.vfs.VirtualFile, analysis: dev.secureloop.plugin.model.AnalysisResponse) {
+    fun approveFix(presentation: IncidentPresentation) {
+        val resolved = presentation.resolution as? ResolutionState.Resolved ?: run {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop can only apply fixes for resolved incidents.")
+            return
+        }
+        val analysis = presentation.analysis ?: run {
+            failAnalysis(presentation.incident.incidentId, "Run Analyze with Codex before approving a fix.")
+            return
+        }
+
+        val resolvedFile = resolvedVirtualFile(resolved.filePath) ?: run {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop could not reopen the resolved file.")
+            return
+        }
+        val document = FileDocumentManager.getInstance().getDocument(resolvedFile) ?: run {
+            failAnalysis(presentation.incident.incidentId, "SecureLoop could not load a writable document for the resolved file.")
+            return
+        }
+
+        if (!patchMatchesTarget(presentation, resolved, analysis.patch.repoRelativePath)) {
+            failAnalysis(presentation.incident.incidentId, "Patch target does not match the selected incident.")
+            return
+        }
+
+        val currentText = document.text
+        val occurrenceCount = Regex.fromLiteral(analysis.patch.oldText).findAll(currentText).count()
+        if (occurrenceCount != 1) {
+            failAnalysis(
+                presentation.incident.incidentId,
+                "Patch precondition failed: expected oldText exactly once, found $occurrenceCount matches.",
+            )
+            return
+        }
+
+        val updatedText = currentText.replaceFirst(analysis.patch.oldText, analysis.patch.newText)
+        if (updatedText == currentText) {
+            failAnalysis(presentation.incident.incidentId, "Patch precondition failed: replacement produced no file changes.")
+            return
+        }
+
+        updateIncident(presentation.incident.incidentId) {
+            it.copy(
+                analysisState = AnalysisState.Applying,
+                analysisError = null,
+            )
+        }
+
+        try {
+            WriteCommandAction.runWriteCommandAction(project) {
+                document.setText(updatedText)
+                FileDocumentManager.getInstance().saveDocument(document)
+            }
+            updateIncident(presentation.incident.incidentId) {
+                it.copy(
+                    analysisState = AnalysisState.Applied,
+                    analysisError = null,
+                )
+            }
+            service<SecureLoopApplicationService>().openPR(presentation.incident.incidentId) { url ->
+                val prUrl = url ?: "https://github.com/PeytonLi/JBHack/pulls"
+                ApplicationManager.getApplication().invokeLater {
+                    com.intellij.openapi.ui.Messages.showMessageDialog(project, "PR created securely for code remediation!\n\n\$prUrl", "SecureLoop PR Opened", com.intellij.openapi.ui.Messages.getInformationIcon())
+                }
+            }
+        } catch (exception: Throwable) {
+            failAnalysis(
+                presentation.incident.incidentId,
+                "SecureLoop could not apply the approved patch: ${exception.message ?: "unknown error"}.",
+            )
+        }
+    }
+
+    fun reportVulnerability(file: VirtualFile, analysis: AnalyzeIncidentResponse) {
         ApplicationManager.getApplication().invokeLater {
-            val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).selectedTextEditor ?: return@invokeLater
+            val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return@invokeLater
             if (editor.virtualFile == file) {
                val text = editor.document.text
                val startOffset = text.indexOf(analysis.patch.oldText).takeIf { it >= 0 } ?: return@invokeLater
@@ -174,38 +267,6 @@ class SecureLoopProjectService(
                    com.intellij.openapi.editor.markup.HighlighterTargetArea.EXACT_RANGE
                )
             }
-        }
-    }
-
-
-    private fun readSourceContext(filePath: String, lineNumber: Int): String {
-        val file = ProjectFileResolver.findByAbsolutePath(project, filePath) ?: return ""
-        val document = ApplicationManager.getApplication().runReadAction<com.intellij.openapi.editor.Document?> {
-            FileDocumentManager.getInstance().getDocument(file)
-        } ?: return ""
-
-        val totalLines = document.lineCount
-        val targetLine = (lineNumber - 1).coerceIn(0, totalLines - 1)
-        val startLine = (targetLine - 10).coerceAtLeast(0)
-        val endLine = (targetLine + 10).coerceAtMost(totalLines - 1)
-
-        return ApplicationManager.getApplication().runReadAction<String> {
-            val startOffset = document.getLineStartOffset(startLine)
-            val endOffset = document.getLineEndOffset(endLine)
-            document.getText(com.intellij.openapi.util.TextRange(startOffset, endOffset))
-        }
-    }
-
-    private fun readSecurityPolicy(): String? {
-        val basePath = project.basePath ?: return null
-        val policyPath = Path.of(basePath).resolve("security-policy.md")
-        if (!Files.exists(policyPath)) {
-            return null
-        }
-        return try {
-            Files.readString(policyPath)
-        } catch (_: Exception) {
-            null
         }
     }
 
@@ -269,6 +330,23 @@ class SecureLoopProjectService(
         }
     }
 
+    private fun updateIncident(
+        incidentId: String,
+        transform: (IncidentPresentation) -> IncidentPresentation,
+    ) {
+        val existing = incidents.firstOrNull { it.incident.incidentId == incidentId } ?: return
+        upsertIncident(transform(existing))
+    }
+
+    private fun failAnalysis(incidentId: String, message: String) {
+        updateIncident(incidentId) {
+            it.copy(
+                analysisState = AnalysisState.Failed,
+                analysisError = message,
+            )
+        }
+    }
+
     private fun updateEnvironment() {
         ApplicationManager.getApplication().invokeLater {
             panel?.updateEnvironment(connectionState, projectCompatibility)
@@ -327,6 +405,77 @@ class SecureLoopProjectService(
             is FileResolution.Ambiguous -> ResolutionState.Ambiguous(candidates)
             is FileResolution.Unresolved -> ResolutionState.Unresolved(reason)
         }
+    }
+
+    private fun resolvedVirtualFile(filePath: String): VirtualFile? {
+        return ProjectFileResolver.findByAbsolutePath(project, filePath)
+    }
+
+    private fun repoRelativePathFor(
+        presentation: IncidentPresentation,
+        resolved: ResolutionState.Resolved,
+    ): String? {
+        presentation.incident.repoRelativePath?.takeIf { it.isNotBlank() }?.let { return normalizePath(it) }
+        val basePath = project.basePath ?: return null
+        val root = Path.of(basePath).normalize()
+        val filePath = Path.of(resolved.filePath).normalize()
+        return try {
+            normalizePath(root.relativize(filePath).toString())
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
+
+    private fun collectSourceContext(file: VirtualFile, lineNumber: Int): String? {
+        val text = currentFileText(file) ?: return null
+        val lines = text.lines()
+        if (lines.isEmpty()) {
+            return text
+        }
+
+        val zeroBasedLine = (lineNumber - 1).coerceIn(0, lines.lastIndex)
+        val start = (zeroBasedLine - 8).coerceAtLeast(0)
+        val end = (zeroBasedLine + 8).coerceAtMost(lines.lastIndex)
+        return lines.subList(start, end + 1).joinToString("\n")
+    }
+
+    private fun currentFileText(file: VirtualFile): String? {
+        val document = FileDocumentManager.getInstance().getDocument(file)
+        if (document != null) {
+            return document.text
+        }
+        return try {
+            String(file.contentsToByteArray(), file.charset)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun readPolicyText(): String? {
+        val basePath = project.basePath ?: return null
+        val policyPath = Path.of(basePath).resolve("security-policy.md").normalize()
+        return try {
+            Files.readString(policyPath)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun patchMatchesTarget(
+        presentation: IncidentPresentation,
+        resolved: ResolutionState.Resolved,
+        patchPath: String,
+    ): Boolean {
+        val normalizedPatchPath = normalizePath(patchPath)
+        val normalizedIncidentPath = presentation.incident.repoRelativePath?.let(::normalizePath)
+        val normalizedResolvedPath = normalizePath(resolved.filePath)
+        return normalizedPatchPath == normalizedIncidentPath ||
+            normalizedResolvedPath.endsWith("/$normalizedPatchPath") ||
+            normalizedResolvedPath == normalizedPatchPath
+    }
+
+    private fun normalizePath(path: String): String {
+        return path.replace("\\", "/").trim().removePrefix("file:///")
     }
 
     private fun detectProjectCompatibility(): ProjectCompatibilityState {

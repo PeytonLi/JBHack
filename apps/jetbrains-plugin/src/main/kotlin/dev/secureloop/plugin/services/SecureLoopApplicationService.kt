@@ -6,7 +6,8 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import dev.secureloop.plugin.model.AgentConnectionState
 import dev.secureloop.plugin.model.AgentHealthResponse
-import dev.secureloop.plugin.model.AnalysisResponse
+import dev.secureloop.plugin.model.AnalyzeIncidentRequest
+import dev.secureloop.plugin.model.AnalyzeIncidentResponse
 import dev.secureloop.plugin.model.NormalizedIncident
 import kotlinx.serialization.json.Json
 import java.io.BufferedReader
@@ -15,6 +16,7 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
@@ -167,48 +169,72 @@ class SecureLoopApplicationService : Disposable {
     }
 
     fun analyzeIncident(
-        incidentId: String,
-        sourceContext: String,
-        policyText: String?,
-        callback: (AnalysisResponse?) -> Unit,
+        payload: AnalyzeIncidentRequest,
+        onSuccess: (AnalyzeIncidentResponse) -> Unit,
+        onError: (String) -> Unit,
     ) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val token = loadToken()
             if (token.isNullOrBlank()) {
-                callback(null)
+                invokeOnUiThread {
+                    onError("SecureLoop is waiting for the IDE token file at ${tokenFilePath()}.")
+                }
                 return@executeOnPooledThread
             }
 
             try {
-                val bodyJson = buildString {
-                    append('{"sourceContext":')
-                    append(Json.encodeToString(kotlinx.serialization.builtins.serializer<String>(), sourceContext))
-                    if (policyText != null) {
-                        append(',"policyText":')
-                        append(Json.encodeToString(kotlinx.serialization.builtins.serializer<String>(), policyText))
-                    }
-                    append('}')
-                }
-
-                val request = HttpRequest.newBuilder(URI.create("${agentBaseUrl()}/ide/events/$incidentId/analyze"))
+                val requestBody = json.encodeToString(AnalyzeIncidentRequest.serializer(), payload)
+                val requestBytes = requestBody.toByteArray(StandardCharsets.UTF_8)
+                logger.warn(
+                    "Sending SecureLoop analyze request body with ${requestBytes.size} bytes: ${requestBody.take(500)}",
+                )
+                val request = HttpRequest.newBuilder(URI.create("${agentBaseUrl()}/ide/analyze"))
                     .header("Authorization", "Bearer $token")
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
-                    .timeout(Duration.ofSeconds(60))
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .header("Accept", "application/json")
+                    .method("POST", HttpRequest.BodyPublishers.ofByteArray(requestBytes))
+                    .timeout(Duration.ofSeconds(15))
                     .build()
                 val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-                if (response.statusCode() == 200) {
-                    val analysis = json.decodeFromString<AnalysisResponse>(response.body())
-                    callback(analysis)
-                } else {
-                    logger.warn("Analyze request failed with HTTP ${response.statusCode()}.")
-                    callback(null)
+                val responseBody = truncatedResponseBody(response.body())
+                when (response.statusCode()) {
+                    200 -> {
+                        val analysis = json.decodeFromString<AnalyzeIncidentResponse>(response.body())
+                        invokeOnUiThread {
+                            onSuccess(analysis)
+                        }
+                    }
+
+                    401 -> {
+                        logger.warn("Analyze request failed with HTTP ${response.statusCode()}: $responseBody")
+                        publishConnectionState(
+                            AgentConnectionState.Unauthorized(
+                                "The IDE token was rejected by the SecureLoop agent.",
+                            ),
+                        )
+                        invokeOnUiThread {
+                            onError("Analyze request failed with HTTP ${response.statusCode()}: $responseBody")
+                        }
+                    }
+
+                    else -> {
+                        logger.warn("Analyze request failed with HTTP ${response.statusCode()}: $responseBody")
+                        invokeOnUiThread {
+                            onError("Analyze request failed with HTTP ${response.statusCode()}: $responseBody")
+                        }
+                    }
                 }
             } catch (exception: Exception) {
-                logger.warn("Failed to analyze incident $incidentId", exception)
-                callback(null)
+                logger.warn("Failed to analyze SecureLoop incident.", exception)
+                invokeOnUiThread {
+                    onError("SecureLoop could not analyze the incident via ${agentBaseUrl()}.")
+                }
             }
         }
+    }
+
+    override fun dispose() {
+        disposed = true
     }
 
     fun openPR(incidentId: String, callback: (String?) -> Unit) {
@@ -238,7 +264,7 @@ class SecureLoopApplicationService : Disposable {
         ApplicationManager.getApplication().executeOnPooledThread {
             val token = loadToken() ?: return@executeOnPooledThread
             try {
-                val body = Json.encodeToString(mapOf("reason" to reason))
+                val body = kotlinx.serialization.json.Json.encodeToString(mapOf("reason" to reason))
                 val request = HttpRequest.newBuilder(URI.create("${agentBaseUrl()}/ide/reject-fix"))
                     .header("Authorization", "Bearer $token")
                     .header("Content-Type", "application/json")
@@ -248,10 +274,6 @@ class SecureLoopApplicationService : Disposable {
                 client.send(request, HttpResponse.BodyHandlers.discarding())
             } catch (e: Exception) { }
         }
-    }
-
-    override fun dispose() {
-        disposed = true
     }
 
     private fun connectionLoop() {
@@ -431,6 +453,19 @@ class SecureLoopApplicationService : Disposable {
               "codeContext": "warehouse_name = WAREHOUSES[warehouse_id]"
             }
         """.trimIndent()
+    }
+
+    private fun invokeOnUiThread(action: () -> Unit) {
+        ApplicationManager.getApplication().invokeLater(action)
+    }
+
+    private fun truncatedResponseBody(body: String?): String {
+        val normalized = body?.trim().orEmpty().ifBlank { "<empty response body>" }
+        return if (normalized.length <= 800) {
+            normalized
+        } else {
+            normalized.take(800) + "..."
+        }
     }
 
     private fun sleepBeforeReconnect() {

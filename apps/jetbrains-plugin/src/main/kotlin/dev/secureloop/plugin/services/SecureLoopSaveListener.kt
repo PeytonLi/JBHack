@@ -7,7 +7,7 @@ import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileDocumentManagerListener
 import com.intellij.openapi.project.ProjectManager
 import dev.secureloop.plugin.model.AnalyzeFileBody
-import dev.secureloop.plugin.model.AnalysisResponse
+import dev.secureloop.plugin.model.AnalyzeIncidentResponse
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -66,7 +66,7 @@ class SecureLoopSaveListener : FileDocumentManagerListener {
 
                 val response = appService.client.send(request, HttpResponse.BodyHandlers.ofString())
                 if (response.statusCode() == 200) {
-                    val analysis = Json.decodeFromString<AnalysisResponse>(response.body())
+                    val analysis = Json.decodeFromString<AnalyzeIncidentResponse>(response.body())
                     
                     if (analysis.severity == "High" || analysis.severity == "Critical") {
                         // Forward to project service to highlight and show in tool window

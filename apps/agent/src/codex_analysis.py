@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from .codex_client import call_codex, codex_available
 from .models import (
-    AnalysisPatch,
     AnalysisRequest,
-    AnalysisResponse,
+    AnalyzeIncidentResponse,
+    AnalyzePatch,
     GenerateCodeBody,
     GenerateCodeResponse,
     AnalyzeFileBody,
@@ -44,7 +44,7 @@ async def generate_secure_code(body: GenerateCodeBody) -> GenerateCodeResponse:
     return GenerateCodeResponse(completion=result.raw_text.strip())
 
 
-async def analyze_file(body: AnalyzeFileBody) -> AnalysisResponse:
+async def analyze_file(body: AnalyzeFileBody) -> AnalyzeIncidentResponse:
     request = AnalysisRequest(
         incident_id="file-scan-001",
         repo_relative_path=body.file_path,
@@ -58,7 +58,7 @@ async def analyze_file(body: AnalyzeFileBody) -> AnalysisResponse:
     return await analyze_incident(request)
 
 
-async def analyze_incident(request: AnalysisRequest) -> AnalysisResponse:
+async def analyze_incident(request: AnalysisRequest) -> AnalyzeIncidentResponse:
     if not codex_available():
         return _build_fallback_response(request)
 
@@ -90,7 +90,7 @@ async def analyze_incident(request: AnalysisRequest) -> AnalysisResponse:
 def _build_fallback_response(
     request: AnalysisRequest,
     validation_errors: list[str] | None = None,
-) -> AnalysisResponse:
+) -> AnalyzeIncidentResponse:
     if _looks_like_warehouse_keyerror(request):
         old_text = _default_old_text(request)
         new_text = (
@@ -116,7 +116,7 @@ def _build_fallback_response(
         )
         if validation_errors:
             explanation += " Codex output was unavailable or invalid, so a deterministic fallback was used."
-        return AnalysisResponse(
+        return AnalyzeIncidentResponse(
             severity="Low",
             category="Functional Bug - Not a Security Vulnerability",
             owasp=None,
@@ -134,7 +134,7 @@ def _build_fallback_response(
         )
 
     old_text = _default_old_text(request)
-    patch = AnalysisPatch(
+    patch = AnalyzePatch(
         repo_relative_path=request.repo_relative_path,
         old_text=old_text,
         new_text=old_text,
@@ -144,7 +144,7 @@ def _build_fallback_response(
         old_text=patch.old_text,
         new_text=patch.new_text,
     )
-    return AnalysisResponse(
+    return AnalyzeIncidentResponse(
         severity="Low",
         category="Functional Bug - Not a Security Vulnerability",
         owasp=None,
