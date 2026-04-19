@@ -25,6 +25,7 @@ class Settings:
     github_token: str | None = None
     github_repo: str | None = None
     openai_api_key: str | None = None
+    openai_model: str = "gpt-4o"
     ide_auto_launch: bool = True
     ide_launch_command: list[str] | None = None
     ide_launch_cwd: Path | None = None
@@ -64,6 +65,11 @@ def load_settings() -> Settings:
         github_token=os.getenv("GITHUB_TOKEN") or None,
         github_repo=os.getenv("GITHUB_REPO") or None,
         openai_api_key=os.getenv("OPENAI_API_KEY") or None,
+        openai_model=(
+            os.getenv("OPENAI_MODEL")
+            or os.getenv("SECURE_LOOP_OPENAI_MODEL")
+            or "gpt-4o"
+        ),
         ide_auto_launch=ide_auto_launch,
         ide_launch_command=ide_launch_command,
         ide_launch_cwd=ide_launch_cwd,

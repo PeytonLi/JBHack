@@ -6,6 +6,8 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from .config import Settings, load_settings
+
 
 @dataclass(slots=True)
 class CodexResult:
@@ -20,6 +22,11 @@ def codex_available() -> bool:
     return bool(os.getenv("OPENAI_API_KEY"))
 
 
+def _resolve_model(settings: Settings, override: str | None) -> str:
+    """Resolve the OpenAI model name; override wins, else settings default."""
+    return override or settings.openai_model
+
+
 async def call_codex(
     *,
     system_prompt: str,
@@ -27,6 +34,7 @@ async def call_codex(
     response_format: dict[str, Any],
     model: str | None = None,
     max_output_tokens: int = 1200,
+    settings: Settings | None = None,
 ) -> CodexResult:
     if not codex_available():
         return CodexResult(
@@ -35,7 +43,7 @@ async def call_codex(
             error="Codex unavailable: fake mode is enabled or OPENAI_API_KEY is missing.",
         )
 
-    model_name = model or os.getenv("SECURE_LOOP_OPENAI_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.2-codex"
+    model_name = _resolve_model(settings or load_settings(), model)
 
     try:
         client = AsyncOpenAI()
