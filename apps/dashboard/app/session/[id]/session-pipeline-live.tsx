@@ -13,6 +13,74 @@ type Props = {
   agentBaseUrl: string;
 };
 
+type AgentPipelinePayload = {
+  incidentId?: string;
+  step?: string;
+  reason?: string;
+  detail?: string;
+  error?: string;
+  prUrl?: string | null;
+};
+
+const PRE_PR_FAILURE_REASONS = new Set([
+  "incident_not_found",
+  "missing_source_metadata",
+  "source_file_not_found",
+  "patch_mismatch",
+  "sandbox_test_generation_failed",
+  "sandbox_did_not_reproduce",
+  "sandbox_fix_failed",
+  "sandbox_timeout",
+  "sandbox_runner_error",
+  "internal_error",
+]);
+
+function translateAgentEvent(
+  eventName: "pipeline.step" | "pipeline.completed" | "pipeline.failed",
+  payload: AgentPipelinePayload,
+  incidentId: string,
+): PipelineStepEvent[] {
+  if (!payload || payload.incidentId !== incidentId) return [];
+
+  if (eventName === "pipeline.step") {
+    switch (payload.step) {
+      case "fetch_source":
+      case "analyze":
+      case "sandbox":
+        return [{ incidentId, step: "analyzing", status: "running" }];
+      case "open_pr":
+        return [
+          { incidentId, step: "analyzing", status: "completed" },
+          { incidentId, step: "pr_opening", status: "running" },
+        ];
+      default:
+        return [];
+    }
+  }
+
+  if (eventName === "pipeline.completed") {
+    return [
+      {
+        incidentId,
+        step: "pr_opening",
+        status: "completed",
+        prUrl: payload.prUrl ?? null,
+      },
+    ];
+  }
+
+  const reason = payload.reason ?? "unknown";
+  const failedStep = PRE_PR_FAILURE_REASONS.has(reason) ? "analyzing" : "pr_opening";
+  return [
+    {
+      incidentId,
+      step: failedStep,
+      status: "failed",
+      error: payload.detail ?? reason,
+    },
+  ];
+}
+
 export function SessionPipelineLive({
   incidentId,
   initialRecord,
@@ -24,18 +92,19 @@ export function SessionPipelineLive({
   useEffect(() => {
     const source = new EventSource(`${agentBaseUrl}/dashboard/events/stream`);
 
-    const handlePipelineEvent = (evt: MessageEvent) => {
-      try {
-        const ev = JSON.parse(evt.data) as PipelineStepEvent;
-        if (!ev || ev.incidentId !== incidentId) return;
-        if (typeof ev.step !== "string" || typeof ev.status !== "string") {
-          return;
+    const handlePipelineEvent = (
+      eventName: "pipeline.step" | "pipeline.completed" | "pipeline.failed",
+    ) =>
+      (evt: MessageEvent) => {
+        try {
+          const payload = JSON.parse(evt.data) as AgentPipelinePayload;
+          const translated = translateAgentEvent(eventName, payload, incidentId);
+          if (translated.length === 0) return;
+          setEvents((prev) => [...prev, ...translated]);
+        } catch {
+          // ignore malformed frames
         }
-        setEvents((prev) => [...prev, ev]);
-      } catch {
-        // ignore malformed frames
-      }
-    };
+      };
 
     const handleIncidentUpdated = (evt: MessageEvent) => {
       try {
@@ -48,9 +117,15 @@ export function SessionPipelineLive({
       }
     };
 
-    source.addEventListener("pipeline.step", handlePipelineEvent);
-    source.addEventListener("pipeline.completed", handlePipelineEvent);
-    source.addEventListener("pipeline.failed", handlePipelineEvent);
+    source.addEventListener("pipeline.step", handlePipelineEvent("pipeline.step"));
+    source.addEventListener(
+      "pipeline.completed",
+      handlePipelineEvent("pipeline.completed"),
+    );
+    source.addEventListener(
+      "pipeline.failed",
+      handlePipelineEvent("pipeline.failed"),
+    );
     source.addEventListener("incident.updated", handleIncidentUpdated);
 
     return () => source.close();
