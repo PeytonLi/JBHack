@@ -36,6 +36,10 @@ Thumbs.db
 .gradle-home/
 build/
 .intellijPlatform/
+apps/jetbrains-plugin/bin/
 
 # Output artifacts (generated during runs)
 out/
+
+# Logs
+*.log
