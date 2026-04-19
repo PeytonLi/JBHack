@@ -122,8 +122,16 @@ Real Sentry flow:
 
 See [docs/demo-script.md](docs/demo-script.md) for the 3-minute demo, 1-minute video script, and judge Q&A.
 
+## Local Runbook
+
+See [docs/LOCAL_DEMO_RUNBOOK.md](docs/LOCAL_DEMO_RUNBOOK.md) for exact commands to start the agent, launch the JetBrains plugin sandbox, run the pre-commit scan demo, test the Sentry-style backstop, and reset local demo state.
+
 ## Security Notes
 
 - `.env` is ignored by git and must never contain committed secrets.
 - Keep `.env.example` as placeholders only.
 - If a credential is ever pasted into chat, screenshots, or a public commit, rotate it immediately.
+
+## License
+
+SecureLoop is open source under the [MIT License](LICENSE).

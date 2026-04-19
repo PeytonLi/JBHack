@@ -230,9 +230,10 @@ export default function Home() {
               Center
             </h1>
             <p className="mt-5 max-w-xl text-base leading-7 text-slate-400">
-              Real-time incident queue with AI-powered triage. Raw incidents
-              flow in, human review happens in the IDE, and reviewed history
-              is retained in the local queue.
+              This dashboard reflects the real companion service contract: raw
+              incidents in, human review in the IDE, reviewed history retained
+              in the local queue, with Codex analysis and approved fixes
+              handled inside the JetBrains plugin.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <motion.button
