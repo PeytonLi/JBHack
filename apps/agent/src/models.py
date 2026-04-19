@@ -209,6 +209,12 @@ class NavigateResponse(CamelModel):
     incident_id: str
 
 
+class DeleteIncidentsResponse(CamelModel):
+    status: Literal["all", "open", "reviewed"]
+    deleted_count: int
+    incident_ids: list[str]
+
+
 def normalize_sentry_event(
     webhook: IssueAlertWebhook,
     event_payload: dict[str, Any],

@@ -180,6 +180,151 @@ async def test_navigate_endpoint_cors_preflight(app) -> None:
         assert "POST" in response.headers.get("access-control-allow-methods", "")
 
 
+async def _seed_incidents(client: AsyncClient) -> tuple[str, str]:
+    first = await client.post(
+        "/debug/incidents",
+        json={"repoRelativePath": "apps/target/src/main.py", "lineNumber": 45},
+        headers={"authorization": "Bearer ide-token"},
+    )
+    second = await client.post(
+        "/debug/incidents",
+        json={"repoRelativePath": "apps/target/src/main.py", "lineNumber": 88},
+        headers={"authorization": "Bearer ide-token"},
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    return first.json()["incidentId"], second.json()["incidentId"]
+
+
+@pytest.mark.asyncio
+async def test_delete_incidents_all_clears_queue(app) -> None:
+    await app.state.store.initialize()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first_id, second_id = await _seed_incidents(client)
+
+        response = await client.delete("/incidents?status=all")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "all"
+        assert payload["deletedCount"] == 2
+        assert set(payload["incidentIds"]) == {first_id, second_id}
+        assert (
+            response.headers.get("access-control-allow-origin")
+            == "http://localhost:3000"
+        )
+
+        feed = (await client.get("/incidents?status=all")).json()
+        assert feed["summary"]["totalCount"] == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_incidents_reviewed_only(app) -> None:
+    await app.state.store.initialize()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first_id, second_id = await _seed_incidents(client)
+        await app.state.store.mark_reviewed(first_id)
+
+        response = await client.delete("/incidents?status=reviewed")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["deletedCount"] == 1
+        assert payload["incidentIds"] == [first_id]
+
+        feed = (await client.get("/incidents?status=all")).json()
+        assert feed["summary"]["openCount"] == 1
+        assert feed["summary"]["reviewedCount"] == 0
+        assert feed["incidents"][0]["incident"]["incidentId"] == second_id
+
+
+@pytest.mark.asyncio
+async def test_delete_incidents_open_only(app) -> None:
+    await app.state.store.initialize()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first_id, second_id = await _seed_incidents(client)
+        await app.state.store.mark_reviewed(first_id)
+
+        response = await client.delete("/incidents?status=open")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["deletedCount"] == 1
+        assert payload["incidentIds"] == [second_id]
+
+        feed = (await client.get("/incidents?status=all")).json()
+        assert feed["summary"]["openCount"] == 0
+        assert feed["summary"]["reviewedCount"] == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_incidents_rejects_unknown_status(app) -> None:
+    await app.state.store.initialize()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.delete("/incidents?status=bogus")
+        assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_delete_incidents_empty_queue(app) -> None:
+    await app.state.store.initialize()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.delete("/incidents?status=all")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["deletedCount"] == 0
+        assert payload["incidentIds"] == []
+
+
+@pytest.mark.asyncio
+async def test_delete_incidents_cors_preflight(app) -> None:
+    await app.state.store.initialize()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.options("/incidents")
+        assert response.status_code == 204
+        assert (
+            response.headers.get("access-control-allow-origin")
+            == "http://localhost:3000"
+        )
+        methods = response.headers.get("access-control-allow-methods", "")
+        assert "DELETE" in methods
+        assert "GET" in methods
+
+
+@pytest.mark.asyncio
+async def test_delete_incidents_cascades_to_analysis_records(app) -> None:
+    from src.models import AnalyzeIncidentResponse, AnalyzePatch
+
+    await app.state.store.initialize()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first_id, _ = await _seed_incidents(client)
+        analysis = AnalyzeIncidentResponse(
+            severity="Low",
+            category="test",
+            cwe="CWE-000",
+            title="noop",
+            explanation="",
+            violated_policy=[],
+            fix_plan=[],
+            diff="",
+            patch=AnalyzePatch(
+                repo_relative_path="apps/target/src/main.py",
+                old_text="",
+                new_text="",
+            ),
+        )
+        await app.state.store.put_analysis(first_id, analysis)
+        assert await app.state.store.get_analysis(first_id) is not None
+
+        response = await client.delete("/incidents?status=all")
+        assert response.status_code == 200
+        assert await app.state.store.get_analysis(first_id) is None
+
+
 def test_normalize_sentry_event_prefers_in_app_frame() -> None:
     incident = normalize_sentry_event(
         sample_issue_alert_payload_model(),

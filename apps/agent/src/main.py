@@ -30,6 +30,7 @@ from .models import (
     AnalyzePatch,
     CamelModel,
     DebugIncidentRequest,
+    DeleteIncidentsResponse,
     IncidentFeedResponse,
     InternalErrorWebhook,
     InternalIssueWebhook,
@@ -114,6 +115,38 @@ def create_app(
         summary = await app.state.store.get_summary()
         return IncidentFeedResponse(summary=summary, incidents=incidents)
 
+    @app.delete("/incidents")
+    async def delete_incidents(
+        status: Literal["all", "open", "reviewed"] = Query(default="all"),
+    ) -> JSONResponse:
+        dashboard_origin = _dashboard_origin(app.state.settings)
+        deleted_ids = await app.state.store.delete_incidents(status=status)
+        if deleted_ids:
+            await app.state.broker.publish_cleared(
+                status=status,
+                incident_ids=deleted_ids,
+            )
+        body = DeleteIncidentsResponse(
+            status=status,
+            deleted_count=len(deleted_ids),
+            incident_ids=deleted_ids,
+        )
+        return JSONResponse(
+            body.model_dump(mode="json", by_alias=True),
+            headers={"Access-Control-Allow-Origin": dashboard_origin},
+        )
+
+    @app.options("/incidents")
+    async def incidents_preflight() -> Response:
+        return Response(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": _dashboard_origin(app.state.settings),
+                "Access-Control-Allow-Methods": "GET, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+            },
+        )
+
     @app.post("/sentry/webhook", status_code=204)
     @app.post("/webhook/sentry", status_code=204)
     async def sentry_webhook(request: Request) -> Response:
@@ -175,6 +208,10 @@ def create_app(
                         payload = await asyncio.wait_for(queue.get(), timeout=15.0)
                         envelope = json.loads(payload)
                         event_name = envelope.get("type", "incident.created")
+                        if event_name == "incidents.cleared":
+                            body = json.dumps(envelope["cleared"])
+                            yield f"event: incidents.cleared\ndata: {body}\n\n"
+                            continue
                         if event_name not in _DASHBOARD_FORWARDED_TYPES:
                             continue
                         body = json.dumps(envelope["incident"])

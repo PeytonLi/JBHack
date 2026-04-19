@@ -297,6 +297,38 @@ class IncidentStore:
     async def acknowledge(self, incident_id: str) -> bool:
         return await self.mark_reviewed(incident_id)
 
+    async def delete_incidents(
+        self,
+        *,
+        status: Literal["all", "open", "reviewed"] = "all",
+    ) -> list[str]:
+        if status == "open":
+            where_sql = "WHERE acknowledged = 0"
+        elif status == "reviewed":
+            where_sql = "WHERE acknowledged = 1"
+        else:
+            where_sql = ""
+
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                f"SELECT incident_id FROM incidents {where_sql}"
+            )
+            rows = await cursor.fetchall()
+            ids = [row[0] for row in rows]
+            if not ids:
+                return []
+            placeholders = ",".join("?" for _ in ids)
+            await db.execute(
+                f"DELETE FROM analysis_records WHERE incident_id IN ({placeholders})",
+                ids,
+            )
+            await db.execute(
+                f"DELETE FROM incidents WHERE incident_id IN ({placeholders})",
+                ids,
+            )
+            await db.commit()
+        return ids
+
     async def put_analysis(
         self,
         incident_id: str,
@@ -366,6 +398,27 @@ class IncidentBroker:
         envelope = {
             "type": "ide.navigate",
             "navigate": json.loads(navigate.model_dump_json(by_alias=True)),
+        }
+        payload = json.dumps(envelope)
+        async with self._lock:
+            subscribers = list(self._subscribers)
+        for queue in subscribers:
+            queue.put_nowait(payload)
+        return len(subscribers)
+
+    async def publish_cleared(
+        self,
+        *,
+        status: Literal["all", "open", "reviewed"],
+        incident_ids: list[str],
+    ) -> int:
+        envelope = {
+            "type": "incidents.cleared",
+            "cleared": {
+                "status": status,
+                "incidentIds": incident_ids,
+                "deletedCount": len(incident_ids),
+            },
         }
         payload = json.dumps(envelope)
         async with self._lock:
