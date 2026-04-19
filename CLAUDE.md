@@ -54,3 +54,14 @@ pnpm dev               # starts all three apps in parallel
 - `apps/agent/src/claude_client.py` — `call_with_log()` abstraction (all Claude calls go here)
 - `apps/agent/src/coe_writer.py` — Opus 4.7 COE generation
 - `apps/dashboard/app/session/[id]/page.tsx` — live thought log + COE card
+
+## SecureLoop pipeline key files
+
+- `apps/agent/src/codex_analysis.py` — LLM analysis; emits `reasoningSteps`, `depCheck`.
+- `apps/agent/src/dep_check.py` — `pip-audit` wrapper (`SECURELOOP_PIP_AUDIT_BIN` override).
+- `apps/agent/src/github_client.py` — `GitHubClient.open_pr_for_incident()` + conventional commits.
+- `apps/agent/src/main.py` — `/ide/events/{incident_id}/open-pr` with local artifact fallback in `_PR_ARTIFACTS_ROOT`.
+- `apps/agent/src/storage.py` — `analysis_records` table (JSON blob of latest analysis per incident).
+- `apps/jetbrains-plugin/.../SecureLoopProjectService.kt` — `approveFix` (Git4Idea staging), `showDiff`, `openPullRequest`.
+- `apps/jetbrains-plugin/.../SecureLoopToolWindowPanel.kt` — severity badge, CWE pill, dep-check block, Show Diff / Open PR buttons.
+- `apps/agent/tests/test_dep_check.py`, `apps/agent/tests/test_github_pr.py` — regression tests for the new surfaces.

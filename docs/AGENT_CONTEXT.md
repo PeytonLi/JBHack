@@ -243,3 +243,36 @@ Both autoplan reviewers (Claude + Codex) independently concluded Approach C (vid
 4. COE gets 8 hours not 4
 5. 7 named cut-lines with specific fallbacks
 6. `call_with_log()` abstraction + schema introspection prevent most Claude failure modes
+
+## SecureLoop 9-Step Pipeline (gap-closure)
+
+The companion agent + JetBrains plugin implement the full 9-step reference
+pipeline. Files wired into the flow:
+
+- `apps/agent/src/codex_analysis.py` — LLM-driven analysis, schema now
+  includes `reasoningSteps` and `depCheck`.
+- `apps/agent/src/dep_check.py` — wraps `pip-audit --format json`. Honors
+  `SECURELOOP_PIP_AUDIT_BIN`. Returns `DepCheckResult` or `None` when the
+  binary/timeout fails; result is fed into the Codex prompt and surfaced in
+  the analysis response.
+- `apps/agent/src/github_client.py` — `GitHubClient.open_pr_for_incident()`
+  creates the branch, commits the patched file, and opens a PR. Commit
+  messages follow `fix(security): <CWE> <category> in <path>`.
+- `apps/agent/src/main.py` — `/ide/events/{incident_id}/open-pr` endpoint.
+  When `GITHUB_TOKEN` or `GITHUB_REPO` are missing (or PyGithub raises),
+  `_write_local_artifacts()` writes `fix.patch`, `COE.md`, and `meta.json`
+  under `_PR_ARTIFACTS_ROOT` (`apps/agent/out/pr-<incident-id>/`).
+- `apps/agent/src/storage.py` — `analysis_records` table persists the JSON
+  blob of the latest `AnalyzeIncidentResponse` per incident so the plugin
+  can open a PR after an editor restart.
+- `apps/jetbrains-plugin/.../SecureLoopProjectService.kt` — `approveFix`
+  stages the patched file via `Git4Idea` (reflection; optional dep),
+  `showDiff` launches IntelliJ's `DiffManager`, `openPullRequest` calls the
+  agent endpoint and shows success/fallback notifications.
+- `apps/jetbrains-plugin/.../SecureLoopToolWindowPanel.kt` — severity
+  badge + CWE pill rendered via HTML `JBLabel`, reasoning-step list,
+  dep-check block, and "Show Diff" / "Open Pull Request" buttons.
+
+Tests: `tests/test_dep_check.py` (pip-audit parsing + fallback prompts),
+`tests/test_github_pr.py` (auth, 404 on missing analysis, local fallback,
+client success, client exception fallback). Run with `uv run pytest`.
