@@ -1,5 +1,6 @@
 SecureLoop: Authority Statement
-This file is the supreme authority for all security decisions in this codebase. It supersedes all generic OWASP guidance, Codex suggestions, and developer judgment where they conflict.
+
+#This file is the supreme authority for all security decisions in this codebase. It supersedes all generic OWASP guidance, Codex suggestions, and developer judgment where they conflict.
 
 When standard AppSec practice conflicts with this policy: THIS WINS.
 
